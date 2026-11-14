@@ -296,34 +296,48 @@ def map_questions_to_units(
             vec, mat = None, None
         vectorizers[sub] = (vec, mat, units)
 
-    mapped_units: List[str] = []
-    for q in questions:
+    mapped_units: List[str] = ["Unmapped"] * len(questions)
+    # Group question indices by subject for fast vectorized cosine similarity
+    sub_indices: Dict[str, List[int]] = {}
+    for q_idx, q in enumerate(questions):
         sub = q.get("subject", "Physics")
-        if sub not in vectorizers:
-            mapped_units.append("Unmapped")
-            continue
+        if sub in vectorizers:
+            sub_indices.setdefault(sub, []).append(q_idx)
 
+    for sub, idxs in sub_indices.items():
         vec, mat, units = vectorizers[sub]
-        q_blob = " ".join([
-            str(q.get("question", "")),
-            str(q.get("option_1", "")),
-            str(q.get("option_2", "")),
-            str(q.get("option_3", "")),
-            str(q.get("option_4", "")),
-        ])
-        q_low = q_blob.lower()
-        sims = cosine_similarity(vec.transform([q_blob]), mat).flatten() if vec is not None else [0.0] * len(units)
+        blobs = [
+            " ".join([
+                str(questions[i].get("question", "")),
+                str(questions[i].get("option_1", "")),
+                str(questions[i].get("option_2", "")),
+                str(questions[i].get("option_3", "")),
+                str(questions[i].get("option_4", "")),
+            ])
+            for i in idxs
+        ]
+        if vec is not None:
+            sim_matrix = cosine_similarity(vec.transform(blobs), mat)
+        else:
+            sim_matrix = [[0.0] * len(units) for _ in idxs]
 
-        best_idx = 0
-        best_score = -1.0
-        for idx, u in enumerate(units):
-            kw_hits = sum(1 for kw in u.get("keywords", []) if len(kw) >= 4 and kw in q_low)
-            score = float(sims[idx]) + 0.08 * min(kw_hits, 5)
-            if score > best_score:
-                best_score = score
-                best_idx = idx
+        unit_kws = [
+            [kw for kw in u.get("keywords", []) if len(kw) >= 4]
+            for u in units
+        ]
 
-        mapped_units.append(units[best_idx]["unit_name"] if best_score > 0.01 else units[0]["unit_name"])
+        for row_pos, q_idx in enumerate(idxs):
+            q_low = blobs[row_pos].lower()
+            sims = sim_matrix[row_pos]
+            best_idx = 0
+            best_score = -1.0
+            for u_idx, kws in enumerate(unit_kws):
+                kw_hits = sum(1 for kw in kws if kw in q_low)
+                score = float(sims[u_idx]) + 0.08 * min(kw_hits, 5)
+                if score > best_score:
+                    best_score = score
+                    best_idx = u_idx
+            mapped_units[q_idx] = units[best_idx]["unit_name"] if best_score > 0.01 else units[0]["unit_name"]
 
     return mapped_units
 
@@ -362,12 +376,12 @@ def estimate_difficulty(question_text: str, options: List[str]) -> str:
 
 
 def is_valid_mcq(row: Dict) -> bool:
-    """Returns True only for MCQ rows with valid 1-4 answer key and non-empty options."""
+    """Returns True only for complete 4-option MCQs with valid 1-4 answer key."""
     ans = str(row.get("correct_answer", "")).strip()
     if ans not in {"1", "2", "3", "4"}:
         return False
     filled_opts = sum(1 for k in ("option_1", "option_2", "option_3", "option_4") if str(row.get(k, "")).strip())
-    return filled_opts >= 2
+    return filled_opts == 4
 
 
 def select_balanced_mcqs(
