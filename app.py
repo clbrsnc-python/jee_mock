@@ -10,8 +10,9 @@ import io
 import os
 import re
 import time
+import zipfile
 from datetime import datetime, timezone
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Set
 
 import pandas as pd
 import streamlit as st
@@ -203,27 +204,116 @@ def render_admin_panel(sb: Client):
             csv_file = st.file_uploader("Upload consolidated_questions_fixed.csv", type=["csv"])
         with col2:
             img_files = st.file_uploader(
-                "Upload Option PNGs (from option_images/)",
-                type=["png", "jpg", "jpeg"],
+                "Upload Option Images (.zip of option_images/ recommended for 100+ files, or PNG/JPG)",
+                type=["zip", "png", "jpg", "jpeg"],
                 accept_multiple_files=True,
+            )
+            skip_existing = st.checkbox(
+                "Skip images already uploaded to Supabase (fast resume)",
+                value=True,
             )
 
         if img_files and st.button("Upload Option Images to Supabase Storage"):
-            uploaded_cnt = 0
+            # Expand any .zip files cleanly and collect (filename, bytes, content_type)
+            items_to_process = []
             for f in img_files:
-                sb.storage.from_("question-images").upload(
-                    f.name,
-                    f.getvalue(),
-                    {"content-type": f.type or "image/png", "upsert": "true"},
-                )
-                uploaded_cnt += 1
+                low_name = f.name.lower()
+                if low_name.endswith(".zip"):
+                    with zipfile.ZipFile(io.BytesIO(f.getvalue())) as zf:
+                        for info in zf.infolist():
+                            if info.is_dir():
+                                continue
+                            base = os.path.basename(info.filename)
+                            if not base or base.startswith(".") or "__MACOSX" in info.filename:
+                                continue
+                            ext = os.path.splitext(base)[1].lower()
+                            if ext not in {".png", ".jpg", ".jpeg"}:
+                                continue
+                            ctype = "image/jpeg" if ext in {".jpg", ".jpeg"} else "image/png"
+                            items_to_process.append((base, zf.read(info.filename), ctype))
+                else:
+                    ext = os.path.splitext(f.name)[1].lower()
+                    ctype = f.type or ("image/jpeg" if ext in {".jpg", ".jpeg"} else "image/png")
+                    items_to_process.append((os.path.basename(f.name), f.getvalue(), ctype))
+
+            existing_names: Set[str] = set()
+            if skip_existing:
+                try:
+                    offset = 0
+                    while True:
+                        batch = sb.storage.from_("question-images").list("", {"limit": 1000, "offset": offset})
+                        if not batch:
+                            break
+                        for obj in batch:
+                            if isinstance(obj, dict) and obj.get("name"):
+                                existing_names.add(obj["name"])
+                        if len(batch) < 1000:
+                            break
+                        offset += 1000
+                except Exception:
+                    existing_names = set()
+
+            total = len(items_to_process)
+            prog = st.progress(0, text=f"Preparing {total} image(s)...")
+            uploaded_cnt = 0
+            skipped_cnt = 0
+            failed_files: List[str] = []
+
+            for idx, (fname, data, ctype) in enumerate(items_to_process, start=1):
+                if skip_existing and fname in existing_names:
+                    skipped_cnt += 1
+                else:
+                    ok = False
+                    last_err = ""
+                    for attempt in range(3):
+                        try:
+                            sb.storage.from_("question-images").upload(
+                                fname,
+                                data,
+                                {"content-type": ctype, "upsert": "true"},
+                            )
+                            ok = True
+                            break
+                        except Exception as exc:
+                            last_err = str(exc)
+                            time.sleep(0.4 * (attempt + 1))
+                    if ok:
+                        uploaded_cnt += 1
+                        existing_names.add(fname)
+                    else:
+                        failed_files.append(f"{fname} ({last_err})")
+
+                if idx % 20 == 0 or idx == total:
+                    prog.progress(
+                        idx / max(1, total),
+                        text=f"Processed {idx}/{total} — Uploaded: {uploaded_cnt}, Skipped: {skipped_cnt}, Failed: {len(failed_files)}",
+                    )
+
             sb.table("admin_uploads").insert({
                 "upload_type": "option_images",
-                "file_name": f"{uploaded_cnt} images",
+                "file_name": f"{uploaded_cnt} uploaded ({skipped_cnt} skipped)",
                 "storage_path": "question-images/",
                 "rows_processed": uploaded_cnt,
             }).execute()
-            st.success(f"Uploaded {uploaded_cnt} image(s) to Supabase Storage bucket `question-images`.")
+
+            if failed_files:
+                st.warning(
+                    f"Uploaded {uploaded_cnt}, skipped {skipped_cnt} already in Supabase, "
+                    f"and **{len(failed_files)}** failed."
+                )
+                with st.expander(f"View {len(failed_files)} failed image(s)"):
+                    st.text("\n".join(failed_files))
+                st.download_button(
+                    "Download Failed Image List (.txt)",
+                    data="\n".join(failed_files).encode("utf-8"),
+                    file_name="failed_images.txt",
+                    mime="text/plain",
+                )
+            else:
+                st.success(
+                    f"Done! Uploaded {uploaded_cnt} new image(s) to Supabase `question-images` "
+                    f"({skipped_cnt} already existed and were skipped)."
+                )
 
         if csv_file and st.button("Map Units, Auto-Tag Difficulty & Store CSV in Supabase", type="primary"):
             raw_csv_bytes = csv_file.getvalue()
@@ -702,6 +792,7 @@ def render_student_portal(sb: Client):
                     ),
                 })
             st.dataframe(pd.DataFrame(table_rows), use_container_width=True, hide_index=True)
+
 
 # ---------------------------------------------------------------------------
 # App Navigation
