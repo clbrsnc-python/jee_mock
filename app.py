@@ -25,6 +25,7 @@ from syllabus_mapper import (
     map_questions_to_units,
     parse_syllabus_document,
     select_balanced_mcqs,
+    strip_unit_number,
 )
 
 st.set_page_config(
@@ -150,6 +151,10 @@ def render_admin_panel(sb: Client):
         st.subheader("Upload JEE Main Syllabus (PDF or TXT)")
         st.caption("Parsed units are stored in Supabase and used to auto-map every uploaded question.")
         syl_file = st.file_uploader("Choose Syllabus PDF or TXT", type=["pdf", "txt"])
+        replace_existing = st.checkbox(
+            "Replace existing syllabus units before saving (clears old/wrong units)",
+            value=True,
+        )
         if syl_file and st.button("Parse & Save Syllabus to Supabase", type="primary"):
             raw_bytes = syl_file.getvalue()
             storage_path = f"syllabus/{int(time.time())}_{syl_file.name}"
@@ -163,6 +168,8 @@ def render_admin_panel(sb: Client):
             if not units:
                 st.error("No units detected. Ensure headings follow 'PHYSICS / UNIT 1: ...' format.")
             else:
+                if replace_existing:
+                    sb.table("syllabus_units").delete().neq("id", "00000000-0000-0000-0000-000000000000").execute()
                 payload = [
                     {
                         "subject": u["subject"],
@@ -179,7 +186,7 @@ def render_admin_panel(sb: Client):
                     "storage_path": storage_path,
                     "rows_processed": len(payload),
                 }).execute()
-                st.success(f"Saved {len(payload)} syllabus units across Physics, Chemistry, and Mathematics.")
+                st.success(f"Saved {len(payload)} clean syllabus units across Physics, Chemistry, and Mathematics.")
 
         existing_units = sb.table("syllabus_units").select("subject, unit_name, keywords, source_file").order("subject").execute().data
         if existing_units:
@@ -620,7 +627,7 @@ def render_student_portal(sb: Client):
             return
 
         sub_filtered = [q for q in mcq_rows if q["subject"] in sel_subjects]
-        avail_units = sorted({q["unit"] for q in sub_filtered})
+        avail_units = sorted({strip_unit_number(q["unit"]) or "Unmapped" for q in sub_filtered})
         sel_units = st.multiselect(
             "2. Select Unit(s) under selected Subject(s) (Mix & Match)",
             options=avail_units,
@@ -630,7 +637,7 @@ def render_student_portal(sb: Client):
             st.info("Select at least one unit.")
             return
 
-        unit_pool = [q for q in sub_filtered if q["unit"] in sel_units]
+        unit_pool = [q for q in sub_filtered if (strip_unit_number(q["unit"]) or "Unmapped") in sel_units]
         max_q = len(unit_pool)
         st.caption(
             f"Available MCQs matching selection: **{max_q}** "

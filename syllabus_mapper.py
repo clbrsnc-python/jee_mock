@@ -34,6 +34,48 @@ def extract_syllabus_text(file_bytes: bytes, filename: str) -> str:
     return file_bytes.decode("utf-8", errors="replace")
 
 
+def strip_unit_number(unit_name: str) -> str:
+    """Removes leading 'Unit 1:', 'Unit - II:', '1.' prefixes so only the clean unit name remains."""
+    cleaned = re.sub(
+        r"^(?:unit\s*[-–]?\s*(?:\d+|[ivxlcdm]+)|chapter\s*\d+|\d{1,2})\s*[:.\-–]+\s*",
+        "",
+        unit_name.strip(),
+        flags=re.I,
+    )
+    return re.sub(r"\s+", " ", cleaned).strip(" :-–.")
+
+
+def _format_unit_title(title: str) -> str:
+    """Normalizes spacing and converts ALL-CAPS syllabus unit headings to clean readable Title Case."""
+    title = strip_unit_number(title)
+    # Fix missing spaces where pypdf joins words (e.g. 'ofpersons' left as-is, 'Unit3' handled above, 'd - and f-' -> 'd- and f-')
+    title = re.sub(r"\s*,\s*", ", ", title)
+    title = re.sub(r"\s+", " ", title).strip(" :-–.,")
+    if not title:
+        return ""
+
+    letters = [c for c in title if c.isalpha()]
+    upper_ratio = sum(1 for c in letters if c.isupper()) / max(1, len(letters))
+    if upper_ratio > 0.65:
+        small_words = {"and", "or", "of", "in", "to", "for", "with", "on", "the", "a", "an", "by", "from", "at", "as", "into"}
+        preserve_upper = {"iupac", "dna", "rna", "em", "ac", "dc", "si", "ph", "3d", "2d"}
+        words = title.split()
+        out = []
+        for i, w in enumerate(words):
+            low = w.lower()
+            # Keep chemical block prefixes like p-, d-, f-, s- lowercase
+            if re.match(r"^[spdf]-?$", low):
+                out.append(low)
+            elif re.sub(r"[^a-z0-9]", "", low) in preserve_upper:
+                out.append(w.upper())
+            elif i > 0 and low in small_words:
+                out.append(low)
+            else:
+                out.append(w.capitalize())
+        title = " ".join(out)
+    return title
+
+
 def _clean_keywords(text: str) -> List[str]:
     tokens = re.findall(r"[A-Za-z][A-Za-z0-9\-]{2,}", text.lower())
     seen = []
@@ -46,67 +88,157 @@ def _clean_keywords(text: str) -> List[str]:
 def parse_syllabus_document(raw_text: str) -> List[Dict]:
     """
     Parses JEE Main syllabus text (NTA / coaching PDF or plain text) into structured units:
-    [{'subject': 'Physics', 'unit_name': 'Unit 1: Physics and Measurement', 'keywords': [...]}]
-    Supports formats like:
-      - SECTION A / PHYSICS / CHEMISTRY / MATHEMATICS headings
-      - UNIT 1: Kinematics / Unit-2: Laws of Motion / 1. Electrostatics
+    [{'subject': 'Physics', 'unit_name': 'Units and Measurements', 'keywords': [...]}]
+    - Ignores Paper 2A (B.Arch) & Paper 2B (B.Planning) sections.
+    - Keeps Physics/Chemistry/Mathematics strictly separated.
+    - Prevents numbered sub-experiments (e.g. Unit 20 Experimental Skills items) from becoming fake units.
+    - Strips unit numbers ('Unit 1:', 'Unit - II:') so Student UI shows clean unit names.
     """
-    lines = [re.sub(r"\s+", " ", ln).strip() for ln in raw_text.splitlines()]
-    lines = [ln for ln in lines if ln]
+    raw_lines = [re.sub(r"\s+", " ", ln).strip() for ln in raw_text.splitlines()]
+    raw_lines = [ln for ln in raw_lines if ln]
+
+    has_explicit_units = bool(re.search(r"\bunit\s*[-–]?\s*(?:\d+|[ivxlcdm]+)\b", raw_text, re.I))
 
     current_subject = "Physics"
+    in_paper2 = False
     parsed: List[Dict] = []
-    current_unit_title = None
+    current_unit_title: Optional[str] = None
     current_body: List[str] = []
 
-    subject_re = re.compile(r"^(?:part\s*[abc]\s*[-–:]\s*)?(physics|chemistry|mathematics|maths)\b", re.I)
-    unit_re = re.compile(
-        r"^(?:unit\s*[-–]?\s*(?:\d+|[IVXLCDM]+)\s*[:.\-–]?\s*(.+)|"
-        r"(?:chapter\s*)?\d{1,2}\.\s+([A-Z][A-Za-z0-9 ,&\-()/]+))$",
+    paper2_stop_re = re.compile(
+        r"\b(?:paper\s*[-–]?\s*2[ab]?|b\.?\s*arch|b\.?\s*planning|aptitude\s+test|drawing\s+test|"
+        r"general\s+awareness|social\s+sciences|thinking\s+skills)\b",
+        re.I,
+    )
+    paper1_resume_re = re.compile(r"\b(?:paper\s*[-–]?\s*1|b\.?\s*e\.?\s*/\s*b\.?\s*tech)\b", re.I)
+
+    unit_prefix_re = re.compile(r"^unit\s*[-–]?\s*(?:\d+|[ivxlcdm]+)\s*[:.\-–]?\s*(.*)$", re.I)
+    numbered_chapter_re = re.compile(r"^(?:chapter\s*)?\d{1,2}\.\s+([A-Z][A-Za-z0-9 ,&\-()/]+)$")
+    subject_header_re = re.compile(
+        r"^(?:(?:syllabus\s+for\s+jee\s*\(main\)\s*[-–:]?\s*)?"
+        r"(?:part\s*[-–]?\s*(?:[abc]|i{1,3}|1|2|3)\s*[-–:]?\s*)?"
+        r"(?:section\s*[-–]?\s*(?:[abc]|1|2|3)\s*[-–:]?\s*)?)"
+        r"(physics|chemistry|mathematics|maths)\b",
         re.I,
     )
 
     def flush_unit():
-        if current_unit_title:
-            body_text = " ".join(current_body)
-            kws = _clean_keywords(f"{current_unit_title} {body_text}")
-            parsed.append({
-                "subject": current_subject,
-                "unit_name": current_unit_title.strip(" :-–."),
-                "keywords": kws,
-            })
+        nonlocal current_unit_title, current_body
+        if current_unit_title and not in_paper2:
+            clean_title = _format_unit_title(current_unit_title)
+            if clean_title and len(clean_title) >= 3:
+                body_text = " ".join(current_body)
+                kws = _clean_keywords(f"{clean_title} {body_text}")
+                parsed.append({
+                    "subject": current_subject,
+                    "unit_name": clean_title,
+                    "keywords": kws,
+                })
+        current_unit_title = None
+        current_body = []
 
-    for ln in lines:
-        m_sub = subject_re.match(ln)
-        if m_sub and len(ln) <= 60:
+    i = 0
+    while i < len(raw_lines):
+        ln = raw_lines[i]
+
+        # Resume only if explicit Paper 1 / B.E./B.Tech header appears
+        if paper1_resume_re.search(ln) and len(ln) <= 90:
+            in_paper2 = False
+
+        # Stop/ignore Paper 2A (B.Arch) and Paper 2B (B.Planning) sections
+        if paper2_stop_re.search(ln) and len(ln) <= 100 and not unit_prefix_re.match(ln):
             flush_unit()
-            current_unit_title = None
-            current_body = []
+            in_paper2 = True
+            i += 1
+            continue
+
+        if in_paper2:
+            i += 1
+            continue
+
+        # Handle case where pypdf merges Subject header and 'UNIT ...' onto the same line
+        m_sub_inline = re.match(
+            r"^(?:part\s*[-–]?\s*(?:[abc]|i{1,3}|1|2|3)\s*[-–:]?\s*)?"
+            r"(physics|chemistry|mathematics|maths)\s+(unit\s*[-–]?\s*(?:\d+|[ivxlcdm]+)\b.*)$",
+            ln,
+            re.I,
+        )
+        if m_sub_inline:
+            flush_unit()
+            sub_word = m_sub_inline.group(1).lower()
+            current_subject = "Mathematics" if sub_word in {"mathematics", "maths"} else sub_word.capitalize()
+            ln = m_sub_inline.group(2).strip()
+
+        # Check explicit UNIT heading first
+        m_unit = unit_prefix_re.match(ln)
+        if m_unit:
+            flush_unit()
+            title_part = (m_unit.group(1) or "").strip()
+            # Handle case where 'UNIT 15:' is alone on a line and title is on the next line
+            if not title_part and i + 1 < len(raw_lines):
+                i += 1
+                title_part = raw_lines[i].strip()
+            # If pypdf merged body text onto a long UNIT line, trim before sentence body
+            if len(title_part) > 95:
+                # Split on colon or first lowercase-starting clause after uppercase heading
+                m_split = re.match(r"^([A-Z0-9 ,&\-()/]+?)(?:\s+[A-Z][a-z]{2,}\b.*|$)", title_part)
+                if m_split and len(m_split.group(1).strip()) >= 5:
+                    remainder = title_part[len(m_split.group(1)):].strip()
+                    title_part = m_split.group(1).strip()
+                    if remainder:
+                        current_body.append(remainder)
+                else:
+                    title_part = title_part[:95].rsplit(" ", 1)[0]
+            current_unit_title = title_part
+            i += 1
+            continue
+
+        # Check numbered chapter headings ONLY if file doesn't use UNIT prefixes
+        if not has_explicit_units:
+            m_num = numbered_chapter_re.match(ln)
+            if m_num and len(ln) <= 100:
+                flush_unit()
+                current_unit_title = m_num.group(1).strip()
+                i += 1
+                continue
+
+        # Check Subject header (short line like 'MATHEMATICS', 'PHYSICS', 'CHEMISTRY', 'PART A - PHYSICS')
+        m_sub = subject_header_re.match(ln)
+        if m_sub and len(ln.split()) <= 8 and len(ln) <= 75:
+            flush_unit()
             sub_word = m_sub.group(1).lower()
             current_subject = "Mathematics" if sub_word in {"mathematics", "maths"} else sub_word.capitalize()
+            i += 1
             continue
 
-        m_unit = unit_re.match(ln)
-        if m_unit and len(ln) <= 110:
-            flush_unit()
-            title_part = (m_unit.group(1) or m_unit.group(2) or ln).strip()
-            # Keep clean normalized unit label
-            prefix_m = re.match(r"^(unit\s*[-–]?\s*(?:\d+|[IVXLCDM]+))\s*[:.\-–]?\s*(.*)$", ln, re.I)
-            if prefix_m and prefix_m.group(2):
-                current_unit_title = f"{prefix_m.group(1).title()}: {prefix_m.group(2).strip()}"
-            else:
-                current_unit_title = title_part
-            current_body = []
-            continue
+        # Fallback: short standalone line containing ONLY Physics / Chemistry / Mathematics
+        if len(ln.split()) <= 5 and len(ln) <= 55:
+            low_ln = ln.lower()
+            if re.search(r"\b(?:mathematics|maths)\b", low_ln) and "aptitude" not in low_ln:
+                flush_unit()
+                current_subject = "Mathematics"
+                i += 1
+                continue
+            if re.search(r"\bphysics\b", low_ln):
+                flush_unit()
+                current_subject = "Physics"
+                i += 1
+                continue
+            if re.search(r"\bchemistry\b", low_ln) and "practical" not in low_ln and "concepts" not in low_ln:
+                flush_unit()
+                current_subject = "Chemistry"
+                i += 1
+                continue
 
         if current_unit_title:
             current_body.append(ln)
+        i += 1
 
     flush_unit()
 
     # Fallback if user pasted simple "Subject: Unit1, Unit2" lines without UNIT prefixes
     if not parsed:
-        for ln in lines:
+        for ln in raw_lines:
             if ":" in ln:
                 head, tail = ln.split(":", 1)
                 sub_low = head.strip().lower()
@@ -117,11 +249,13 @@ def parse_syllabus_document(raw_text: str) -> List[Dict]:
                     else current_subject
                 )
                 for u in [x.strip() for x in re.split(r"[,;|]", tail) if x.strip()]:
-                    parsed.append({
-                        "subject": sub,
-                        "unit_name": u,
-                        "keywords": _clean_keywords(u),
-                    })
+                    clean_u = _format_unit_title(u)
+                    if clean_u:
+                        parsed.append({
+                            "subject": sub,
+                            "unit_name": clean_u,
+                            "keywords": _clean_keywords(clean_u),
+                        })
 
     # Deduplicate by (subject, unit_name)
     unique_map: Dict[Tuple[str, str], Dict] = {}
