@@ -703,7 +703,6 @@ def render_student_portal(sb: Client):
                 })
             st.dataframe(pd.DataFrame(table_rows), use_container_width=True, hide_index=True)
 
-
 # ---------------------------------------------------------------------------
 # App Navigation
 # ---------------------------------------------------------------------------
