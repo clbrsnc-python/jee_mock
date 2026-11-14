@@ -334,7 +334,7 @@ def render_admin_panel(sb: Client):
                     "option_2": r.get("option 2", r.get("option_2", "")),
                     "option_3": r.get("option 3", r.get("option_3", "")),
                     "option_4": r.get("option 4", r.get("option_4", "")),
-                    "correct_answer": r.get("correct_answer", "Unknown").strip(),
+                    "correct_answer": (r.get("correct_answer", "").strip() or "Unknown"),
                     "csv_difficulty": r.get("difficulty", "").strip(),
                     "csv_unit": r.get("unit", "").strip(),
                 }
@@ -378,17 +378,27 @@ def render_admin_panel(sb: Client):
                     "content_hash": c_hash,
                 })
 
-            # Upsert in chunks of 200
-            for start in range(0, len(db_rows), 200):
-                sb.table("questions").upsert(db_rows[start:start + 200], on_conflict="content_hash").execute()
+            # Upsert in chunks of 200 with live progress bar (scales cleanly to 14,000+ rows)
+            total_rows = len(db_rows)
+            mcq_count = sum(1 for r in db_rows if r["is_mcq"])
+            non_mcq_count = total_rows - mcq_count
+            up_prog = st.progress(0, text=f"Saving {total_rows} unique questions to Supabase...")
+            for start in range(0, total_rows, 200):
+                batch = db_rows[start:start + 200]
+                sb.table("questions").upsert(batch, on_conflict="content_hash").execute()
+                done = min(start + len(batch), total_rows)
+                up_prog.progress(done / max(1, total_rows), text=f"Saved {done}/{total_rows} questions...")
 
             sb.table("admin_uploads").insert({
                 "upload_type": "questions_csv",
                 "file_name": csv_file.name,
                 "storage_path": csv_storage_path,
-                "rows_processed": len(db_rows),
+                "rows_processed": total_rows,
             }).execute()
-            st.success(f"Stored & mapped {len(db_rows)} unique questions in Supabase (with `unit` beside `Question`).")
+            st.success(
+                f"Stored & mapped **{total_rows}** unique questions in Supabase "
+                f"(**{mcq_count}** valid 1–4 MCQs active for tests · **{non_mcq_count}** numerical/5/Unknown archived with `is_mcq=False`)."
+            )
 
     # --- Tab 3: Question Bank Editor & Mapped CSV Download ---
     with tab_bank:
@@ -403,10 +413,15 @@ def render_admin_panel(sb: Client):
             if st.button("Re-run Automatic Syllabus Mapping on All Questions"):
                 syl_units = sb.table("syllabus_units").select("*").execute().data
                 new_units = map_questions_to_units(rows, syl_units)
-                for q_row, u_name in zip(rows, new_units):
+                remap_prog = st.progress(0, text="Updating mapped units...")
+                changed_cnt = 0
+                for idx, (q_row, u_name) in enumerate(zip(rows, new_units), start=1):
                     if u_name != q_row["unit"]:
                         sb.table("questions").update({"unit": u_name}).eq("id", q_row["id"]).execute()
-                st.success("Re-mapped all questions against current syllabus.")
+                        changed_cnt += 1
+                    if idx % 100 == 0 or idx == len(rows):
+                        remap_prog.progress(idx / max(1, len(rows)), text=f"Checked {idx}/{len(rows)} questions...")
+                st.success(f"Re-mapped all questions against current syllabus ({changed_cnt} updated).")
                 st.rerun()
 
         df_bank = pd.DataFrame(rows)
@@ -430,22 +445,43 @@ def render_admin_panel(sb: Client):
                 mime="text/csv",
             )
 
+        st.caption(
+            f"Total in DB: **{len(df_bank)}** | Valid MCQs (`1–4`): **{int(df_bank['is_mcq'].sum())}** | "
+            f"Non-MCQ / Numerical / Unknown: **{int((~df_bank['is_mcq']).sum())}**"
+        )
+        f1, f2, f3 = st.columns(3)
+        with f1:
+            f_sub = st.selectbox("Filter Subject", ["All"] + sorted(df_bank["subject"].unique().tolist()))
+        with f2:
+            f_mcq = st.selectbox("Filter Type", ["All", "MCQs Only", "Non-MCQ / Unknown"])
+        with f3:
+            f_limit = st.selectbox("Max Rows in Editor", [100, 250, 500], index=0)
+
+        view_df = df_bank
+        if f_sub != "All":
+            view_df = view_df[view_df["subject"] == f_sub]
+        if f_mcq == "MCQs Only":
+            view_df = view_df[view_df["is_mcq"] == True]
+        elif f_mcq == "Non-MCQ / Unknown":
+            view_df = view_df[view_df["is_mcq"] == False]
+        view_df = view_df.head(int(f_limit))
+
         unit_options = sorted({u["unit_name"] for u in sb.table("syllabus_units").select("unit_name").execute().data} | {"Unmapped"})
         edit_cols = ["id", "subject", "question_no", "question", "unit", "difficulty", "correct_answer", "is_mcq"]
         edited = st.data_editor(
-            df_bank[edit_cols],
+            view_df[edit_cols],
             use_container_width=True,
             hide_index=True,
             disabled=["id", "subject", "question_no", "question"],
             column_config={
                 "unit": st.column_config.SelectboxColumn("Unit", options=unit_options, required=True),
                 "difficulty": st.column_config.SelectboxColumn("Difficulty", options=["Easy", "Medium", "Hard"], required=True),
-                "correct_answer": st.column_config.SelectboxColumn("Key", options=["1", "2", "3", "4", "Unknown"]),
+                "correct_answer": st.column_config.TextColumn("Key"),
                 "is_mcq": st.column_config.CheckboxColumn("MCQ?"),
             },
         )
         if st.button("Save Admin Edits to Supabase", type="primary"):
-            orig_map = df_bank.set_index("id").to_dict("index")
+            orig_map = view_df.set_index("id").to_dict("index")
             changed = 0
             for _, row in edited.iterrows():
                 qid = row["id"]
