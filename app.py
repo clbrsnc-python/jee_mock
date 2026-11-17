@@ -1081,7 +1081,7 @@ def render_student_auth(sb: Client):
     st.markdown(
         '<div class="jee-hero">'
         '<h2>JEE Main PrepVibe</h2>'
-        '<p>Design personalized Physics, Chemistry & Mathematics tests, track your Performance.</p>'
+        '<p>Personalized Physics, Chemistry & Mathematics Tests with Performance Monitor.</p>'
         '</div>',
         unsafe_allow_html=True,
     )
