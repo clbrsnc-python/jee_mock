@@ -513,4 +513,3 @@ def select_subject_divided_mcqs(
             diff_counts[k] += sub_diff.get(k, 0)
 
     return chosen, diff_counts, sub_counts
-
