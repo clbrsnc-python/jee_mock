@@ -439,3 +439,78 @@ def select_balanced_mcqs(
         "Hard": sum(1 for q in selected if q.get("difficulty") == "Hard"),
     }
     return selected, counts
+
+
+REMAINDER_PRIORITY = ("Chemistry", "Physics", "Mathematics")
+
+
+def compute_subject_quotas(
+    avail_by_subject: Dict[str, int],
+    n_questions: int,
+) -> Dict[str, int]:
+    """
+    Divides n_questions evenly across active subjects using Chemistry -> Physics -> Mathematics
+    priority for remainders (e.g. N=10 -> Chem 4, Phy 3, Math 3; N=11 -> Chem 4, Phy 4, Math 3),
+    and redistributes shortfalls if one subject has fewer available MCQs than its quota.
+    """
+    active = [s for s in REMAINDER_PRIORITY if avail_by_subject.get(s, 0) > 0]
+    if not active or n_questions <= 0:
+        return {}
+
+    total_avail = sum(avail_by_subject[s] for s in active)
+    target_total = min(n_questions, total_avail)
+
+    base, rem = divmod(target_total, len(active))
+    quotas = {s: min(avail_by_subject[s], base + (1 if idx < rem else 0)) for idx, s in enumerate(active)}
+
+    # Redistribute any deficit if a selected unit pool was smaller than its fair share
+    assigned = sum(quotas.values())
+    while assigned < target_total:
+        progressed = False
+        for s in active:
+            if quotas[s] < avail_by_subject[s]:
+                quotas[s] += 1
+                assigned += 1
+                progressed = True
+                if assigned >= target_total:
+                    break
+        if not progressed:
+            break
+    return quotas
+
+
+def select_subject_divided_mcqs(
+    pool: List[Dict],
+    n_questions: int,
+    seed: int = None,
+) -> Tuple[List[Dict], Dict[str, int], Dict[str, int]]:
+    """
+    Selects n_questions split cleanly across selected subjects (Chem -> Phy -> Math remainder priority),
+    maintaining silent 35% Easy / 30% Medium / 35% Hard difficulty balance inside each subject.
+    Returns (ordered_questions, diff_counts, subject_counts).
+    """
+    by_sub: Dict[str, List[Dict]] = {s: [] for s in SUBJECTS}
+    for q in pool:
+        sub = q.get("subject", "Physics")
+        if sub in by_sub:
+            by_sub[sub].append(q)
+
+    avail_counts = {s: len(by_sub[s]) for s in SUBJECTS if by_sub[s]}
+    quotas = compute_subject_quotas(avail_counts, n_questions)
+
+    chosen: List[Dict] = []
+    diff_counts = {"Easy": 0, "Medium": 0, "Hard": 0}
+    sub_counts: Dict[str, int] = {}
+
+    for sub in SUBJECTS:
+        qty = quotas.get(sub, 0)
+        if qty <= 0:
+            continue
+        sub_chosen, sub_diff = select_balanced_mcqs(by_sub[sub], qty, seed=seed)
+        chosen.extend(sub_chosen)
+        sub_counts[sub] = len(sub_chosen)
+        for k in diff_counts:
+            diff_counts[k] += sub_diff.get(k, 0)
+
+    return chosen, diff_counts, sub_counts
+
