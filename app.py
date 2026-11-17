@@ -1080,8 +1080,8 @@ def render_admin_panel(sb: Client):
 def render_student_auth(sb: Client):
     st.markdown(
         '<div class="jee-hero">'
-        '<h2>JEE Main Custom Mock Test Portal</h2>'
-        '<p>Design personalized Physics, Chemistry & Mathematics tests, track your score %, and download Question Booklets.</p>'
+        '<h2>JEE Main PrepVibe</h2>'
+        '<p>Design personalized Physics, Chemistry & Mathematics tests, track your Performance.</p>'
         '</div>',
         unsafe_allow_html=True,
     )
