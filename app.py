@@ -397,8 +397,36 @@ def _find_unicode_ttf() -> Optional[str]:
     return None
 
 
+def _clean_latex_for_pdf(s: str) -> str:
+    """Converts common LaTeX fragments (including nested powers) into clean readable plain text for PDF output."""
+    for _ in range(2):
+        s = re.sub(r"\^\{([^{}]+)\}", r"^(\1)", s)
+        s = re.sub(r"_\{([^{}]+)\}", r"_(\1)", s)
+        s = re.sub(r"\\frac\s*\{([^{}]+)\}\s*\{([^{}]+)\}", r"(\1)/(\2)", s)
+        s = re.sub(r"\\sqrt\s*\{([^{}]+)\}", r"sqrt(\1)", s)
+    s = s.replace(r"\sqrt", "sqrt")
+    latex_tokens = {
+        r"\in": " in ", r"\notin": " not in ", r"\le": "<=", r"\leq": "<=",
+        r"\ge": ">=", r"\geq": ">=", r"\neq": "!=", r"\approx": "~=",
+        r"\pm": "+/-", r"\times": " x ", r"\cdot": "*", r"\div": "/",
+        r"\to": " -> ", r"\rightarrow": " -> ", r"\Rightarrow": " => ",
+        r"\Leftrightarrow": " <=> ", r"\infty": "infinity", r"\cup": " U ",
+        r"\cap": " intersect ", r"\subset": " subset ", r"\mathbb{R}": "R",
+        r"\mathbb{N}": "N", r"\mathbb{Z}": "Z", r"\mathbb{Q}": "Q",
+        r"\alpha": "alpha", r"\beta": "beta", r"\gamma": "gamma", r"\delta": "delta",
+        r"\theta": "theta", r"\lambda": "lambda", r"\mu": "mu", r"\pi": "pi",
+        r"\sigma": "sigma", r"\phi": "phi", r"\omega": "omega", r"\Delta": "Delta",
+        r"\Omega": "Omega", r"\left": "", r"\right": "",
+    }
+    for tok, rep in latex_tokens.items():
+        s = s.replace(tok, rep)
+    s = s.replace("$", "")
+    return s
+
+
 def _pdf_text(text: str, use_unicode: bool) -> str:
-    s = re.sub(r"\s+", " ", str(text or "")).strip()
+    s = _clean_latex_for_pdf(str(text or ""))
+    s = re.sub(r"\s+", " ", s).strip()
     if use_unicode:
         return s
     for k, v in _UNICODE_FALLBACK_MAP.items():
@@ -454,13 +482,13 @@ def build_question_booklet_pdf(
     # Header Block (Visually distinct for Practice Mode vs Answer & Revision Mode)
     usable_w = max(40.0, pdf.w - pdf.l_margin - pdf.r_margin)
     if hide_skipped_answers:
-        header_title = "JEE Main Mock Test - Practice Booklet (Skipped Answers Hidden)"
-        mode_note = "Mode: Practice Booklet — Answers hidden for unattempted/skipped questions"
+        header_title = "JEE Main Mock Test - Practice Booklet (Answers Hidden)"
+        mode_note = "Mode: Practice Booklet — Correct answers hidden for wrong & unattempted questions"
         pdf.set_fill_color(254, 243, 199)  # Soft Warm Amber
         title_rgb = (180, 83, 9)           # Deep Amber
     else:
         header_title = "JEE Main Mock Test - Answer & Revision Booklet"
-        mode_note = "Mode: Answer & Revision Booklet — Complete solution keys shown"
+        mode_note = "Mode: Answer & Revision Booklet — Complete answer keys shown"
         pdf.set_fill_color(239, 246, 255)  # Soft Royal Blue
         title_rgb = (30, 58, 138)          # Deep Blue
 
@@ -539,18 +567,21 @@ def build_question_booklet_pdf(
             else:
                 _safe_multicell(pdf, 5.5, _pdf_text(f"  ({opt_num}) {opt_val}", use_unicode))
 
-        # Outcome line following Option 2A rules
+        # Outcome line: Practice Mode hides correct answer for BOTH wrong & unattempted questions
         set_f(10, bold=True)
         if status == "correct":
             pdf.set_text_color(5, 150, 105)
             verdict = f"Result: CORRECT (+4)  |  Your Attempted Option: ({sel})"
         elif status == "wrong":
             pdf.set_text_color(220, 38, 38)
-            verdict = f"Result: WRONG (-1)  |  Your Attempted Option: ({sel})  |  Correct Answer: ({corr})"
+            if hide_skipped_answers:
+                verdict = f"Result: WRONG (-1)  |  Your Attempted Option: ({sel})  |  Correct answer hidden for re-practice"
+            else:
+                verdict = f"Result: WRONG (-1)  |  Your Attempted Option: ({sel})  |  Correct Answer: ({corr})"
         else:
             pdf.set_text_color(217, 119, 6)
             if hide_skipped_answers:
-                verdict = "Result: UNATTEMPTED (0)  |  Answer hidden for re-practice"
+                verdict = "Result: UNATTEMPTED (0)  |  Correct answer hidden for re-practice"
             else:
                 verdict = f"Result: SKIPPED (0)  |  Correct Answer: ({corr})"
 
@@ -1011,11 +1042,16 @@ def render_admin_panel(sb: Client):
                 new_key = c_key.text_input("Answer Key", value=str(q_obj.get("correct_answer", "")), key=f"fl_key_{fid}")
                 new_mcq = c_mcq.checkbox("Active MCQ?", value=bool(q_obj.get("is_mcq", True)), key=f"fl_mcq_{fid}")
 
-                new_qtext = st.text_area("Question Text (edit to fix symbols if needed)", value=q_obj.get("question", ""), key=f"fl_qtxt_{fid}", height=90)
-                st.caption(
-                    f"(1) {q_obj.get('option_1', '')}  |  (2) {q_obj.get('option_2', '')}  |  "
-                    f"(3) {q_obj.get('option_3', '')}  |  (4) {q_obj.get('option_4', '')}"
-                )
+                new_qtext = st.text_area("Question Text (edit to fix symbols/formulas if needed)", value=q_obj.get("question", ""), key=f"fl_qtxt_{fid}", height=90)
+                st.caption("Live Formula Preview:")
+                st.markdown(new_qtext or "_(Empty)_")
+
+                o_c1, o_c2 = st.columns(2)
+                new_o1 = o_c1.text_input("Option (1)", value=str(q_obj.get("option_1", "")), key=f"fl_o1_{fid}")
+                new_o2 = o_c2.text_input("Option (2)", value=str(q_obj.get("option_2", "")), key=f"fl_o2_{fid}")
+                o_c3, o_c4 = st.columns(2)
+                new_o3 = o_c3.text_input("Option (3)", value=str(q_obj.get("option_3", "")), key=f"fl_o3_{fid}")
+                new_o4 = o_c4.text_input("Option (4)", value=str(q_obj.get("option_4", "")), key=f"fl_o4_{fid}")
 
                 b1, b2, _ = st.columns([1.3, 1, 3])
                 if b1.button("Save Fix & Resolve", key=f"fl_save_{fid}", type="primary"):
@@ -1023,6 +1059,10 @@ def render_admin_panel(sb: Client):
                         "subject": new_sub,
                         "unit": new_unit,
                         "question": new_qtext,
+                        "option_1": new_o1,
+                        "option_2": new_o2,
+                        "option_3": new_o3,
+                        "option_4": new_o4,
                         "correct_answer": new_key.strip() or "Unknown",
                         "is_mcq": bool(new_mcq),
                     }).eq("id", qid).execute()
@@ -1305,7 +1345,7 @@ def render_submission_review(sb: Client):
 
     col_pdf_opt, col_pdf_btn = st.columns([2, 1.5])
     hide_skipped_pdf = col_pdf_opt.checkbox(
-        "Hide answers for skipped questions in PDF (Practice Mode)",
+        "Practice Mode: Hide correct answers for Wrong & Unattempted questions in PDF",
         value=False,
         key="rev_pdf_hide_skip",
     )
@@ -1714,7 +1754,7 @@ def render_student_portal(sb: Client):
                 format_func=lambda i: attempt_labels[i],
             )
             hide_skip_hist = col_chk.checkbox(
-                "Hide answers for skipped questions (Practice Mode)",
+                "Practice Mode: Hide correct answers for Wrong & Unattempted questions in PDF",
                 value=False,
                 key="hist_pdf_hide_skip",
             )
@@ -1761,7 +1801,7 @@ def render_student_portal(sb: Client):
                             hide_skipped_answers=hide_skip_hist,
                         )
                         hist_dl_label = (
-                            "⬇️ Download Practice Booklet PDF (Skipped Answers Hidden)"
+                            "⬇️ Download Practice Booklet PDF (Wrong & Unattempted Answers Hidden)"
                             if hide_skip_hist
                             else "⬇️ Download Answer & Revision Booklet PDF"
                         )
