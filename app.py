@@ -6,8 +6,10 @@ Stack: Streamlit + Supabase (PostgreSQL + Storage) + GitHub Deployment
 
 import hashlib
 import hmac
+import html
 import io
 import os
+import random
 import re
 import time
 import urllib.request
@@ -46,6 +48,30 @@ FLAG_REASON_OPTIONS = [
     "Suspected Wrong Answer Key",
     "Other",
 ]
+
+MOTIVATIONAL_QUOTES = [
+    "Yes, you can!",
+    "Mistakes are proof that you are learning something new.",
+    "Every question you solve today builds tomorrow's rank.",
+    "Small daily progress adds up to big JEE results.",
+    "Stay calm, read carefully, and trust your preparation.",
+    "Focus on accuracy first — speed follows naturally.",
+    "One tough problem cracked is confidence earned.",
+    "Consistency beats intensity. Keep showing up!",
+    "Your future self will thank you for today's practice.",
+    "Don't fear hard questions — let them sharpen your mind.",
+    "Believe in your preparation and give this test your best.",
+    "Every mock test turns weak spots into strong topics.",
+    "Stay curious, stay steady, and keep moving forward.",
+    "Success is built one concept and one practice set at a time.",
+    "Breathe deep, stay sharp, and solve with confidence.",
+    "Progress, not perfection — learn something from every question.",
+]
+
+
+def _pick_login_quote(prev_quote: Optional[str] = None) -> str:
+    choices = [q for q in MOTIVATIONAL_QUOTES if q != prev_quote]
+    return random.choice(choices or MOTIVATIONAL_QUOTES)
 
 
 # ---------------------------------------------------------------------------
@@ -154,6 +180,21 @@ def inject_custom_theme(is_active_test: bool = False):
             color: #475569;
             font-size: 0.96rem;
         }}
+        .jee-quote-box {{
+            margin-top: 12px;
+            background: linear-gradient(90deg, #FEF3C7 0%, #FFFBEB 100%);
+            border: 1px solid #FCD34D;
+            border-left: 5px solid #D97706;
+            border-radius: 12px;
+            padding: 12px 18px;
+            color: #78350F;
+            font-size: 1.02rem;
+            font-weight: 700;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            box-shadow: 0 2px 8px rgba(217, 119, 6, 0.08);
+        }}
         .jee-auth-showcase {{
             background: linear-gradient(155deg, #EFF6FF 0%, #FFFFFF 60%, #FEF3C7 100%);
             border: 1px solid #DBEAFE;
@@ -195,17 +236,43 @@ def inject_custom_theme(is_active_test: bool = False):
             padding: 16px 20px;
             margin: 12px 0 16px 0;
         }}
+        /* High-visibility bordered surrounding for ALL checkboxes (Options, Flags, PDF toggle) */
+        [data-testid="stCheckbox"] {{
+            background-color: #EFF6FF !important;
+            border: 1.5px solid #60A5FA !important;
+            border-radius: 10px !important;
+            padding: 6px 10px !important;
+            display: inline-flex !important;
+            align-items: center !important;
+            width: fit-content !important;
+        }}
+        [data-testid="stCheckbox"] label {{
+            margin-bottom: 0 !important;
+        }}
+        [data-testid="stCheckbox"] [data-baseweb="checkbox"] > span:first-child,
+        [data-testid="stCheckbox"] [data-baseweb="checkbox"] > div:first-child {{
+            border: 2px solid #1D4ED8 !important;
+            background-color: #FFFFFF !important;
+            border-radius: 5px !important;
+        }}
+        /* Fixed floating countdown clock visible even when scrolling down */
         .jee-timer-bar {{
+            position: fixed;
+            top: 56px;
+            right: 24px;
+            z-index: 9999;
             background-color: #FFFFFF;
-            border: 1px solid #CBD5E1;
-            border-left: 5px solid #2563EB;
+            border: 2px solid #2563EB;
             border-radius: 12px;
-            padding: 12px 18px;
+            padding: 10px 16px;
             font-family: 'JetBrains Mono', monospace;
-            font-size: 0.95rem;
+            font-size: 0.9rem;
             color: #0F172A;
-            margin-bottom: 12px;
-            box-shadow: 0 1px 4px rgba(15, 23, 42, 0.04);
+            box-shadow: 0 8px 24px rgba(37, 99, 235, 0.16);
+            max-width: calc(100vw - 48px);
+        }}
+        .jee-timer-spacer {{
+            height: 44px;
         }}
         </style>
         """,
@@ -384,14 +451,28 @@ def build_question_booklet_pdf(
     pct = round((obtained / full_marks) * 100.0, 1)
     dt_str = str(attempt.get("test_date", ""))[:16].replace("T", " ")
 
-    # Header Block
+    # Header Block (Visually distinct for Practice Mode vs Answer & Revision Mode)
     usable_w = max(40.0, pdf.w - pdf.l_margin - pdf.r_margin)
-    pdf.set_fill_color(239, 246, 255)
-    pdf.rect(pdf.l_margin, 10, usable_w, 28, "F")
+    if hide_skipped_answers:
+        header_title = "JEE Main Mock Test - Practice Booklet (Skipped Answers Hidden)"
+        mode_note = "Mode: Practice Booklet — Answers hidden for unattempted/skipped questions"
+        pdf.set_fill_color(254, 243, 199)  # Soft Warm Amber
+        title_rgb = (180, 83, 9)           # Deep Amber
+    else:
+        header_title = "JEE Main Mock Test - Answer & Revision Booklet"
+        mode_note = "Mode: Answer & Revision Booklet — Complete solution keys shown"
+        pdf.set_fill_color(239, 246, 255)  # Soft Royal Blue
+        title_rgb = (30, 58, 138)          # Deep Blue
+
+    pdf.rect(pdf.l_margin, 10, usable_w, 33, "F")
     pdf.set_xy(pdf.l_margin + 3, 13)
     set_f(14, bold=True)
-    pdf.set_text_color(30, 58, 138)
-    pdf.cell(usable_w - 6, 7, _pdf_text("JEE Main Mock Test - Question & Answer Booklet", use_unicode), new_x="LMARGIN", new_y="NEXT")
+    pdf.set_text_color(*title_rgb)
+    pdf.cell(usable_w - 6, 7, _pdf_text(header_title, use_unicode), new_x="LMARGIN", new_y="NEXT")
+
+    pdf.set_x(pdf.l_margin + 3)
+    set_f(9, bold=True)
+    pdf.cell(usable_w - 6, 5, _pdf_text(mode_note, use_unicode), new_x="LMARGIN", new_y="NEXT")
 
     pdf.set_x(pdf.l_margin + 3)
     set_f(10)
@@ -416,12 +497,14 @@ def build_question_booklet_pdf(
         new_x="LMARGIN",
         new_y="NEXT",
     )
-    pdf.set_xy(pdf.l_margin, 42)
+    pdf.set_xy(pdf.l_margin, 47)
 
     for idx, item in enumerate(review_rows, start=1):
         q = item["question"]
-        status = item["status"]
         sel = item.get("selected")
+        status = str(item.get("status", "")).strip().lower()
+        if not sel and status not in ("correct", "wrong"):
+            status = "skipped"
         corr = str(item.get("correct", q.get("correct_answer", ""))).strip()
         unit_clean = strip_unit_number(q.get("unit", "Unmapped"))
 
@@ -988,6 +1071,8 @@ def render_student_auth(sb: Client):
                     res = sb.table("students").select("*").eq("email", email).execute().data
                     if res and verify_password(pwd, res[0]["password_hash"]):
                         st.session_state["student"] = res[0]
+                        st.session_state["login_quote"] = _pick_login_quote(st.session_state.get("last_login_quote"))
+                        st.session_state["last_login_quote"] = st.session_state["login_quote"]
                         st.rerun()
                     else:
                         st.error("Invalid email or password.")
@@ -1011,6 +1096,8 @@ def render_student_auth(sb: Client):
                                 "password_hash": hash_password(pwd),
                             }).execute().data[0]
                             st.session_state["student"] = created
+                            st.session_state["login_quote"] = _pick_login_quote(st.session_state.get("last_login_quote"))
+                            st.session_state["last_login_quote"] = st.session_state["login_quote"]
                             st.success("Registered successfully!")
                             st.rerun()
 
@@ -1151,8 +1238,46 @@ def _on_nav_click(target_idx: int):
         test["current_idx"] = target_idx
 
 
+def _on_flag_checkbox_change(qid: str):
+    """Updates student flags instantly in session state as checkboxes are toggled."""
+    test = st.session_state.get("active_test")
+    if not test:
+        return
+    reasons = [
+        reason
+        for i, reason in enumerate(FLAG_REASON_OPTIONS)
+        if st.session_state.get(f"flg_chk_{qid}_{i}", False)
+    ]
+    if reasons:
+        test.setdefault("flags", {})[qid] = {"reasons": reasons, "note": ""}
+    else:
+        test.setdefault("flags", {}).pop(qid, None)
+
+
+def _clear_flag_click(qid: str):
+    test = st.session_state.get("active_test")
+    if test:
+        test.setdefault("flags", {}).pop(qid, None)
+    for i in range(len(FLAG_REASON_OPTIONS)):
+        st.session_state[f"flg_chk_{qid}_{i}"] = False
+
+
 def _exit_review_to_home():
     st.session_state.pop("last_review", None)
+
+
+def _mark_booklet_downloaded(sb: Client, attempt_id: str):
+    """Records booklet download timestamp in Supabase test_attempts and updates active review state."""
+    if not attempt_id:
+        return
+    now_iso = datetime.now(timezone.utc).isoformat()
+    try:
+        sb.table("test_attempts").update({"booklet_downloaded_at": now_iso}).eq("id", attempt_id).execute()
+    except Exception:
+        pass
+    last_rev = st.session_state.get("last_review")
+    if isinstance(last_rev, dict) and last_rev.get("attempt", {}).get("id") == attempt_id:
+        last_rev["attempt"]["booklet_downloaded_at"] = now_iso
 
 
 def render_submission_review(sb: Client):
@@ -1192,13 +1317,28 @@ def render_submission_review(sb: Client):
             review_rows=rows,
             hide_skipped_answers=hide_skipped_pdf,
         )
+        pdf_label = (
+            "📄 Download Practice Booklet PDF"
+            if hide_skipped_pdf
+            else "📄 Download Answer & Revision Booklet PDF"
+        )
+        pdf_filename = (
+            f"JEE_Practice_Booklet_{att['test_date'][:10]}.pdf"
+            if hide_skipped_pdf
+            else f"JEE_Answer_Revision_Booklet_{att['test_date'][:10]}.pdf"
+        )
         col_pdf_btn.download_button(
-            "📄 Download Question Booklet PDF",
+            pdf_label,
             data=pdf_bytes,
-            file_name=f"JEE_Mock_Booklet_{att['test_date'][:10]}.pdf",
+            file_name=pdf_filename,
             mime="application/pdf",
             type="primary",
+            key=f"rev_dl_pdf_{att['id']}_{'prac' if hide_skipped_pdf else 'ans'}",
+            on_click=_mark_booklet_downloaded,
+            args=(sb, att["id"]),
         )
+        if att.get("booklet_downloaded_at"):
+            col_pdf_btn.caption("✅ Booklet download recorded on your Performance Board.")
     except Exception as exc:
         col_pdf_btn.warning(f"Could not generate PDF ({exc}). You can still review below or download from Performance Record.")
 
@@ -1246,7 +1386,7 @@ def render_active_test(sb: Client):
     q = questions[idx]
     qid = q["id"]
 
-    # Live countdown fragment (triggers full rerun on expiry)
+    # Live countdown fragment (fixed floating bar visible even when scrolling down)
     @st.fragment(run_every=1)
     def live_timer_banner():
         elapsed = int(time.time() - test["start_epoch"])
@@ -1259,13 +1399,12 @@ def render_active_test(sb: Client):
             flg_cnt = len(test.get("flags", {}))
             st.markdown(
                 f'<div class="jee-timer-bar">'
-                f'⏱️ <strong>Remaining Time: {format_duration(remaining)}</strong> '
-                f'(Allotted: {format_duration(test["total_allotted_sec"])}) &nbsp;|&nbsp; '
-                f'Question <strong>{idx + 1}/{total_q}</strong> &nbsp;|&nbsp; '
-                f'Answered: <strong>{ans_cnt}</strong> &nbsp;|&nbsp; '
-                f'Flagged: <strong>{flg_cnt}</strong> &nbsp;|&nbsp; '
-                f'Marking: +4 / -1 / 0'
-                f'</div>',
+                f'⏱️ <strong>{format_duration(remaining)}</strong> left '
+                f'<span style="color:#64748B;">/ {format_duration(test["total_allotted_sec"])}</span> &nbsp;|&nbsp; '
+                f'Q<strong>{idx + 1}/{total_q}</strong> &nbsp;|&nbsp; '
+                f'Ans: <strong>{ans_cnt}</strong> &nbsp;|&nbsp; '
+                f'Flag: <strong>{flg_cnt}</strong>'
+                f'</div><div class="jee-timer-spacer"></div>',
                 unsafe_allow_html=True,
             )
 
@@ -1287,14 +1426,14 @@ def render_active_test(sb: Client):
                 prefix = "●" if is_curr else ("✓" if is_ans else "")
                 suffix = "🚩" if is_flg else ""
                 label = f"{prefix}{q_num + 1}{suffix}".strip()
-                if row_cols[offset].button(
+                row_cols[offset].button(
                     label,
                     key=f"pal_{q_num}",
                     type="primary" if is_curr else "secondary",
+                    on_click=_on_nav_click,
+                    args=(q_num,),
                     use_container_width=True,
-                ):
-                    test["current_idx"] = q_num
-                    st.rerun()
+                )
 
     # Pure White Single-Question Card (NO Easy / Medium / Hard shown!)
     unit_clean = strip_unit_number(q.get("unit", "Unmapped"))
@@ -1307,32 +1446,20 @@ def render_active_test(sb: Client):
         with hdr_r:
             btn_lbl = "🚩 Flagged ✓" if existing_flag else "🚩 Flag Issue"
             with st.popover(btn_lbl, use_container_width=True):
-                st.caption("Instant local mark (saved when you submit — zero timer delay).")
-                default_reasons = existing_flag.get("reasons", []) if existing_flag else []
-                sel_reasons = st.multiselect(
-                    "Reason(s)",
-                    options=FLAG_REASON_OPTIONS,
-                    default=default_reasons,
-                    key=f"flg_r_{qid}",
-                )
-                note_val = st.text_input(
-                    "Note (optional)",
-                    value=existing_flag.get("note", "") if existing_flag else "",
-                    key=f"flg_n_{qid}",
-                )
-                fc1, fc2 = st.columns(2)
-                if fc1.button("Mark Flag", key=f"flg_ok_{qid}", type="primary"):
-                    if sel_reasons or note_val.strip():
-                        test.setdefault("flags", {})[qid] = {
-                            "reasons": sel_reasons or ["Reported Issue"],
-                            "note": note_val.strip(),
-                        }
-                    else:
-                        test.setdefault("flags", {}).pop(qid, None)
-                    st.rerun()
-                if existing_flag and fc2.button("Remove", key=f"flg_rm_{qid}"):
-                    test.setdefault("flags", {}).pop(qid, None)
-                    st.rerun()
+                st.caption("Select one or more issues (auto-saved immediately):")
+                saved_reasons = set(existing_flag.get("reasons", [])) if existing_flag else set()
+                for r_idx, reason_txt in enumerate(FLAG_REASON_OPTIONS):
+                    flg_key = f"flg_chk_{qid}_{r_idx}"
+                    if flg_key not in st.session_state:
+                        st.session_state[flg_key] = reason_txt in saved_reasons
+                    st.checkbox(
+                        reason_txt,
+                        key=flg_key,
+                        on_change=_on_flag_checkbox_change,
+                        args=(qid,),
+                    )
+                if existing_flag:
+                    st.button("Clear Flag", key=f"flg_clr_{qid}", on_click=_clear_flag_click, args=(qid,))
 
         if existing_flag:
             st.caption(f"🚩 Marked for Admin verification: {', '.join(existing_flag.get('reasons', []))}")
@@ -1405,6 +1532,7 @@ def render_student_portal(sb: Client):
             st.session_state.pop("student", None)
             st.session_state.pop("active_test", None)
             st.session_state.pop("last_review", None)
+            st.session_state.pop("login_quote", None)
             st.rerun()
 
     if st.session_state.get("active_test"):
@@ -1415,10 +1543,16 @@ def render_student_portal(sb: Client):
         render_submission_review(sb)
         return
 
+    if not st.session_state.get("login_quote"):
+        st.session_state["login_quote"] = _pick_login_quote(st.session_state.get("last_login_quote"))
+        st.session_state["last_login_quote"] = st.session_state["login_quote"]
+
+    quote_html = html.escape(st.session_state["login_quote"])
+    name_html = html.escape(student["full_name"])
     st.markdown(
         '<div class="jee-hero">'
-        f'<h2>Welcome back, {student["full_name"]}!</h2>'
-        '<p>Choose your Physics, Chemistry & Mathematics units below to start a timed JEE Mock Test, or download Question Booklets from your Performance Board.</p>'
+        f'<h2>Welcome back, {name_html}!</h2>'
+        f'<div class="jee-quote-box"><span>✨</span><span>“{quote_html}”</span></div>'
         '</div>',
         unsafe_allow_html=True,
     )
@@ -1430,105 +1564,103 @@ def render_student_portal(sb: Client):
         mcq_rows = fetch_all_questions(sb, mcq_only=True)
         if not mcq_rows:
             st.warning("No MCQ questions uploaded yet. Ask Admin to upload syllabus & CSV.")
-            return
+        else:
+            # Group available units by subject (clean names without unit numbers)
+            units_by_sub: Dict[str, List[str]] = {}
+            for sub in SUBJECTS:
+                sub_units = sorted({
+                    strip_unit_number(q["unit"]) or "Unmapped"
+                    for q in mcq_rows
+                    if q["subject"] == sub
+                })
+                units_by_sub[sub] = sub_units
 
-        # Group available units by subject (clean names without unit numbers)
-        units_by_sub: Dict[str, List[str]] = {}
-        for sub in SUBJECTS:
-            sub_units = sorted({
-                strip_unit_number(q["unit"]) or "Unmapped"
-                for q in mcq_rows
-                if q["subject"] == sub
-            })
-            units_by_sub[sub] = sub_units
-
-        c_phy, c_chem, c_math = st.columns(3)
-        selected_units_by_sub: Dict[str, List[str]] = {}
-        badge_styles = {
-            "Physics": ("jee-sub-phy", "Physics"),
-            "Chemistry": ("jee-sub-chem", "Chemistry"),
-            "Mathematics": ("jee-sub-math", "Mathematics"),
-        }
-
-        for col_widget, sub in ((c_phy, "Physics"), (c_chem, "Chemistry"), (c_math, "Mathematics")):
-            with col_widget:
-                css_cls, lbl = badge_styles[sub]
-                st.markdown(f'<div class="jee-sub-badge {css_cls}">{lbl}</div>', unsafe_allow_html=True)
-                opts = ["Select All"] + units_by_sub[sub]
-                picked = st.multiselect(
-                    f"{sub} Units",
-                    options=opts,
-                    default=[],
-                    placeholder=f"Choose {sub} units (optional)",
-                    label_visibility="collapsed",
-                    key=f"pick_units_{sub}",
-                )
-                if "Select All" in picked:
-                    selected_units_by_sub[sub] = units_by_sub[sub]
-                else:
-                    selected_units_by_sub[sub] = picked
-
-        unit_pool = [
-            q for q in mcq_rows
-            if (strip_unit_number(q["unit"]) or "Unmapped") in selected_units_by_sub.get(q["subject"], [])
-        ]
-        avail_by_sub = {
-            sub: sum(1 for q in unit_pool if q["subject"] == sub)
-            for sub in SUBJECTS
-            if selected_units_by_sub.get(sub)
-        }
-        active_subs = [sub for sub in SUBJECTS if avail_by_sub.get(sub, 0) > 0]
-        max_q = len(unit_pool)
-
-        if max_q == 0:
-            st.info("Select **Select All** or one or more units in at least one subject above to configure your test.")
-            return
-
-        st.subheader("2. Set Total Number of Questions & Review Test Rules")
-        n_q = st.number_input(
-            "Total Questions",
-            min_value=1,
-            max_value=max_q,
-            value=min(15, max_q),
-            step=1,
-        )
-
-        quotas = compute_subject_quotas(avail_by_sub, int(n_q))
-        split_summary = " · ".join(f"{sub}: <strong>{quotas[sub]} Qs</strong>" for sub in SUBJECTS if quotas.get(sub, 0) > 0)
-        allotted_min = int(n_q) * 2
-        full_marks = int(n_q) * 4
-
-        st.markdown(
-            f"""
-            <div class="jee-rules-card">
-                <strong>Mock Test Details & Process:</strong><br/>
-                • <strong>Question Distribution ({int(n_q)} Total):</strong> {split_summary} &nbsp;<em>(Selected across {sum(len(selected_units_by_sub[s]) for s in active_subs)} unit(s))</em><br/>
-                • <strong>Time Allotted:</strong> {allotted_min} minutes ({int(n_q)} × 2 minutes per question) with automatic submission when time ends.<br/>
-                • <strong>Marking Scheme:</strong> <strong>+4</strong> for Correct, <strong>-1</strong> for Wrong, <strong>0</strong> for Skipped.<br/>
-                • <strong>Test Interface:</strong> One question at a time on a clean white canvas with checkboxes beside options (1)–(4), <strong>Previous / Skip / Next</strong> navigation, and an instant <strong>🚩 Flag Issue</strong> option to report subject, unit, or symbol issues.<br/>
-                • <strong>Score Publication:</strong> Immediate answer review + downloadable <strong>Question Booklet PDF</strong> linked to your Performance Record.
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
-
-        if st.button(f"Start Mock Test ({int(n_q)} Questions · {full_marks} Marks)", type="primary"):
-            chosen, diff_counts, _ = select_subject_divided_mcqs(unit_pool, int(n_q))
-            selected_unit_names = sorted({
-                u for s in active_subs for u in selected_units_by_sub[s]
-            })
-            st.session_state["active_test"] = {
-                "questions": chosen,
-                "responses": {},
-                "flags": {},
-                "current_idx": 0,
-                "subjects": active_subs,
-                "units": selected_unit_names,
-                "diff_counts": diff_counts,
-                "start_epoch": time.time(),
-                "total_allotted_sec": int(n_q) * 120,
+            c_phy, c_chem, c_math = st.columns(3)
+            selected_units_by_sub: Dict[str, List[str]] = {}
+            badge_styles = {
+                "Physics": ("jee-sub-phy", "Physics"),
+                "Chemistry": ("jee-sub-chem", "Chemistry"),
+                "Mathematics": ("jee-sub-math", "Mathematics"),
             }
-            st.rerun()
+
+            for col_widget, sub in ((c_phy, "Physics"), (c_chem, "Chemistry"), (c_math, "Mathematics")):
+                with col_widget:
+                    css_cls, lbl = badge_styles[sub]
+                    st.markdown(f'<div class="jee-sub-badge {css_cls}">{lbl}</div>', unsafe_allow_html=True)
+                    opts = ["Select All"] + units_by_sub[sub]
+                    picked = st.multiselect(
+                        f"{sub} Units",
+                        options=opts,
+                        default=[],
+                        placeholder=f"Choose {sub} units (optional)",
+                        label_visibility="collapsed",
+                        key=f"pick_units_{sub}",
+                    )
+                    if "Select All" in picked:
+                        selected_units_by_sub[sub] = units_by_sub[sub]
+                    else:
+                        selected_units_by_sub[sub] = picked
+
+            unit_pool = [
+                q for q in mcq_rows
+                if (strip_unit_number(q["unit"]) or "Unmapped") in selected_units_by_sub.get(q["subject"], [])
+            ]
+            avail_by_sub = {
+                sub: sum(1 for q in unit_pool if q["subject"] == sub)
+                for sub in SUBJECTS
+                if selected_units_by_sub.get(sub)
+            }
+            active_subs = [sub for sub in SUBJECTS if avail_by_sub.get(sub, 0) > 0]
+            max_q = len(unit_pool)
+
+            if max_q == 0:
+                st.info("Select **Select All** or one or more units in at least one subject above to configure your test.")
+            else:
+                st.subheader("2. Set Total Number of Questions & Review Test Rules")
+                n_q = st.number_input(
+                    "Total Questions",
+                    min_value=1,
+                    max_value=max_q,
+                    value=min(15, max_q),
+                    step=1,
+                )
+
+                quotas = compute_subject_quotas(avail_by_sub, int(n_q))
+                split_summary = " · ".join(f"{sub}: <strong>{quotas[sub]} Qs</strong>" for sub in SUBJECTS if quotas.get(sub, 0) > 0)
+                allotted_min = int(n_q) * 2
+                full_marks = int(n_q) * 4
+
+                st.markdown(
+                    f"""
+                    <div class="jee-rules-card">
+                        <strong>Mock Test Details & Process:</strong><br/>
+                        • <strong>Question Distribution ({int(n_q)} Total):</strong> {split_summary} &nbsp;<em>(Selected across {sum(len(selected_units_by_sub[s]) for s in active_subs)} unit(s))</em><br/>
+                        • <strong>Time Allotted:</strong> {allotted_min} minutes ({int(n_q)} × 2 minutes per question) with automatic submission when time ends.<br/>
+                        • <strong>Marking Scheme:</strong> <strong>+4</strong> for Correct, <strong>-1</strong> for Wrong, <strong>0</strong> for Skipped.<br/>
+                        • <strong>Test Interface:</strong> One question at a time on a clean white canvas with checkboxes beside options (1)–(4), <strong>Previous / Skip / Next</strong> navigation, and an instant <strong>🚩 Flag Issue</strong> option to report subject, unit, or symbol issues.<br/>
+                        • <strong>Score Publication:</strong> Immediate answer review + downloadable <strong>Question Booklet PDF</strong> linked to your Performance Record.
+                    </div>
+                    """,
+                    unsafe_allow_html=True,
+                )
+
+                if st.button(f"Start Mock Test ({int(n_q)} Questions · {full_marks} Marks)", type="primary"):
+                    chosen, diff_counts, _ = select_subject_divided_mcqs(unit_pool, int(n_q))
+                    selected_unit_names = sorted({
+                        u for s in active_subs for u in selected_units_by_sub[s]
+                    })
+                    st.session_state["active_test"] = {
+                        "questions": chosen,
+                        "responses": {},
+                        "flags": {},
+                        "current_idx": 0,
+                        "subjects": active_subs,
+                        "units": selected_unit_names,
+                        "diff_counts": diff_counts,
+                        "start_epoch": time.time(),
+                        "total_allotted_sec": int(n_q) * 120,
+                    }
+                    st.rerun()
 
     with tab_history:
         st.subheader("Your Performance Record")
@@ -1550,6 +1682,8 @@ def render_student_portal(sb: Client):
                 full_m = max(1, int(a["full_marks"]))
                 obt_m = int(a["marks_obtained"])
                 pct = round((obt_m / full_m) * 100.0, 1)
+                dl_raw = a.get("booklet_downloaded_at")
+                dl_status = f"✅ {str(dl_raw)[:16].replace('T', ' ')}" if dl_raw else "Not yet"
                 table_rows.append({
                     "Date of Test": dt_str,
                     "Subjects": a.get("subjects_covered", ""),
@@ -1563,6 +1697,7 @@ def render_student_portal(sb: Client):
                     "Time Taken / Total Allotted Time": (
                         f"{format_duration(a['time_taken_sec'])} / {format_duration(a['total_allotted_sec'])}"
                     ),
+                    "Booklet Downloaded": dl_status,
                 })
                 attempt_labels.append(
                     f"{dt_str} · {a.get('subjects_covered', '')} · {obt_m}/{full_m} ({pct}%)"
@@ -1584,8 +1719,11 @@ def render_student_portal(sb: Client):
                 key="hist_pdf_hide_skip",
             )
 
-            if st.button("📄 Prepare Question Booklet PDF", type="primary"):
-                chosen_att = attempts[picked_idx]
+            chosen_att = attempts[picked_idx]
+            if st.button("📄 Prepare Question Booklet PDF", type="primary", key="hist_prepare_pdf_btn"):
+                st.session_state["hist_pdf_attempt_id"] = chosen_att["id"]
+
+            if st.session_state.get("hist_pdf_attempt_id") == chosen_att["id"]:
                 ans_rows = (
                     sb.table("attempt_answers")
                     .select("*")
@@ -1622,12 +1760,25 @@ def render_student_portal(sb: Client):
                             review_rows=hist_review,
                             hide_skipped_answers=hide_skip_hist,
                         )
+                        hist_dl_label = (
+                            "⬇️ Download Practice Booklet PDF (Skipped Answers Hidden)"
+                            if hide_skip_hist
+                            else "⬇️ Download Answer & Revision Booklet PDF"
+                        )
+                        hist_filename = (
+                            f"JEE_Practice_Booklet_{chosen_att['test_date'][:10]}.pdf"
+                            if hide_skip_hist
+                            else f"JEE_Answer_Revision_Booklet_{chosen_att['test_date'][:10]}.pdf"
+                        )
                         st.download_button(
-                            "⬇️ Click to Download Question Booklet PDF",
+                            hist_dl_label,
                             data=pdf_data,
-                            file_name=f"JEE_Mock_Booklet_{chosen_att['test_date'][:10]}.pdf",
+                            file_name=hist_filename,
                             mime="application/pdf",
                             type="primary",
+                            key=f"hist_dl_pdf_{chosen_att['id']}_{'prac' if hide_skip_hist else 'ans'}",
+                            on_click=_mark_booklet_downloaded,
+                            args=(sb, chosen_att["id"]),
                         )
                     except Exception as exc:
                         st.error(f"Could not generate PDF: {exc}")
