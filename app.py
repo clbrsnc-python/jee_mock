@@ -1831,8 +1831,8 @@ def main():
     inject_custom_theme(is_active_test=bool(st.session_state.get("active_test")))
     sb = get_supabase()
     with st.sidebar:
-        st.title("JEE Prep Portal")
-        mode = st.radio("Workspace", ["Student Mock Test", "Admin Console"])
+        st.title("Selection Panel")
+        mode = st.radio("Workspace", ["Student", "Admin"])
 
     if mode == "Admin Console":
         render_admin_panel(sb)
