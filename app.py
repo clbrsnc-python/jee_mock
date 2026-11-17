@@ -58,16 +58,35 @@ def inject_custom_theme(is_active_test: bool = False):
         <style>
         @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=JetBrains+Mono:wght@500;700&display=swap');
 
-        html, body, [class*="css"], .stApp {{
+        html, body, h1, h2, h3, h4, p, span, label, input, textarea, button,
+        [class*="css"], .stApp, [data-testid="stMarkdownContainer"] {{
             font-family: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, sans-serif !important;
             color: #0F172A;
         }}
-        .stApp, [data-testid="stAppViewContainer"] {{
+        .stApp, [data-testid="stAppViewContainer"], [data-testid="stHeader"] {{
             background-color: {app_bg} !important;
+        }}
+        #MainMenu, footer {{
+            visibility: hidden;
         }}
         [data-testid="stSidebar"] {{
             background-color: #FFFFFF !important;
             border-right: 1px solid #E2E8F0;
+        }}
+        /* Card Containers & Auth Forms */
+        [data-testid="stForm"] {{
+            background-color: #FFFFFF !important;
+            border: 1px solid #E2E8F0 !important;
+            border-radius: 16px !important;
+            padding: 24px !important;
+            box-shadow: 0 4px 18px rgba(15, 23, 42, 0.05) !important;
+        }}
+        [data-testid="stMetric"] {{
+            background-color: #FFFFFF;
+            border: 1px solid #E2E8F0;
+            border-radius: 12px;
+            padding: 12px 16px;
+            box-shadow: 0 1px 4px rgba(15, 23, 42, 0.04);
         }}
         /* Styled Pill / Card Tabs (replaces default Streamlit gray/red tabs) */
         .stTabs [data-baseweb="tab-list"] {{
@@ -78,11 +97,11 @@ def inject_custom_theme(is_active_test: bool = False):
             border: 1px solid #DBEAFE;
         }}
         .stTabs [data-baseweb="tab"] {{
-            height: 40px;
+            height: 42px;
             border-radius: 8px;
-            padding: 0 18px;
+            padding: 0 20px;
             font-weight: 600;
-            font-size: 0.92rem;
+            font-size: 0.93rem;
             color: #334155;
             background-color: transparent;
             border: none !important;
@@ -90,21 +109,21 @@ def inject_custom_theme(is_active_test: bool = False):
         .stTabs [aria-selected="true"] {{
             background-color: #FFFFFF !important;
             color: #1D4ED8 !important;
-            box-shadow: 0 1px 3px rgba(15, 23, 42, 0.08);
+            box-shadow: 0 2px 6px rgba(37, 99, 235, 0.12);
         }}
         .stTabs [data-baseweb="tab-highlight"],
         .stTabs [data-baseweb="tab-border"] {{
             display: none !important;
         }}
-        /* Primary Buttons */
+        /* Primary & Secondary Buttons */
         .stButton > button[kind="primary"] {{
             background: linear-gradient(135deg, #2563EB 0%, #1D4ED8 100%);
             border: none;
             color: #FFFFFF;
             font-weight: 600;
             border-radius: 10px;
-            padding: 0.5rem 1.25rem;
-            box-shadow: 0 2px 6px rgba(37, 99, 235, 0.22);
+            padding: 0.55rem 1.3rem;
+            box-shadow: 0 3px 10px rgba(37, 99, 235, 0.22);
         }}
         .stButton > button[kind="primary"]:hover {{
             background: linear-gradient(135deg, #1D4ED8 0%, #1E40AF 100%);
@@ -113,7 +132,7 @@ def inject_custom_theme(is_active_test: bool = False):
             border-radius: 10px;
             font-weight: 600;
         }}
-        /* Hero & Metric Cards */
+        /* Hero, Showcase & Subject Badges */
         .jee-hero {{
             background: linear-gradient(135deg, #EFF6FF 0%, #FFFFFF 55%, #FEF3C7 100%);
             border: 1px solid #DBEAFE;
@@ -132,6 +151,39 @@ def inject_custom_theme(is_active_test: bool = False):
             color: #475569;
             font-size: 0.96rem;
         }}
+        .jee-auth-showcase {{
+            background: linear-gradient(155deg, #EFF6FF 0%, #FFFFFF 60%, #FEF3C7 100%);
+            border: 1px solid #DBEAFE;
+            border-radius: 16px;
+            padding: 28px;
+            height: 100%;
+        }}
+        .jee-auth-showcase h3 {{
+            margin: 0 0 10px 0;
+            color: #1E3A8A;
+            font-weight: 800;
+        }}
+        .jee-feature-pill {{
+            background-color: #FFFFFF;
+            border: 1px solid #E2E8F0;
+            border-left: 4px solid #2563EB;
+            border-radius: 10px;
+            padding: 10px 14px;
+            margin-top: 10px;
+            font-size: 0.9rem;
+            color: #334155;
+        }}
+        .jee-sub-badge {{
+            border-radius: 10px;
+            padding: 8px 14px;
+            font-weight: 700;
+            font-size: 0.95rem;
+            margin-bottom: 6px;
+            border: 1px solid #E2E8F0;
+        }}
+        .jee-sub-phy {{ background-color: #EFF6FF; color: #1D4ED8; border-left: 4px solid #2563EB; }}
+        .jee-sub-chem {{ background-color: #ECFDF5; color: #047857; border-left: 4px solid #059669; }}
+        .jee-sub-math {{ background-color: #FFFBEB; color: #B45309; border-left: 4px solid #D97706; }}
         .jee-rules-card {{
             background-color: #FFFFFF;
             border: 1px solid #BFDBFE;
@@ -141,7 +193,7 @@ def inject_custom_theme(is_active_test: bool = False):
             margin: 12px 0 16px 0;
         }}
         .jee-timer-bar {{
-            background-color: #F8FAFC;
+            background-color: #FFFFFF;
             border: 1px solid #CBD5E1;
             border-left: 5px solid #2563EB;
             border-radius: 12px;
@@ -150,13 +202,6 @@ def inject_custom_theme(is_active_test: bool = False):
             font-size: 0.95rem;
             color: #0F172A;
             margin-bottom: 12px;
-        }}
-        .jee-question-surface {{
-            background-color: #FFFFFF;
-            border: 1px solid #E2E8F0;
-            border-radius: 14px;
-            padding: 18px 22px;
-            margin-bottom: 14px;
             box-shadow: 0 1px 4px rgba(15, 23, 42, 0.04);
         }}
         </style>
@@ -892,45 +937,61 @@ def render_student_auth(sb: Client):
     st.markdown(
         '<div class="jee-hero">'
         '<h2>JEE Main Custom Mock Test Portal</h2>'
-        '<p>Practice unit-wise or full-syllabus MCQs with timed exam mode, instant analytics, and downloadable Question Booklets.</p>'
+        '<p>Design personalized Physics, Chemistry & Mathematics tests, track your score %, and download Question Booklets.</p>'
         '</div>',
         unsafe_allow_html=True,
     )
-    tab_login, tab_reg = st.tabs(["Sign In", "New Student Registration"])
 
-    with tab_login:
-        with st.form("student_login_form"):
-            email = st.text_input("Email Address").strip().lower()
-            pwd = st.text_input("Password", type="password")
-            if st.form_submit_button("Sign In to Portal", type="primary"):
-                res = sb.table("students").select("*").eq("email", email).execute().data
-                if res and verify_password(pwd, res[0]["password_hash"]):
-                    st.session_state["student"] = res[0]
-                    st.rerun()
-                else:
-                    st.error("Invalid email or password.")
+    col_info, col_auth = st.columns([1.05, 1.25], gap="large")
+    with col_info:
+        st.markdown(
+            """
+            <div class="jee-auth-showcase">
+                <h3>Built for Focused JEE Practice</h3>
+                <div class="jee-feature-pill"><strong>Unit-Wise Mix & Match:</strong> Pick specific units or Select All across Physics, Chemistry & Mathematics.</div>
+                <div class="jee-feature-pill"><strong>Real Exam Interface:</strong> Clean white canvas, 1 question at a time, 2 min/question timer, +4 / -1 / 0 scoring.</div>
+                <div class="jee-feature-pill"><strong>Scorecard & PDF Booklet:</strong> Instant answer analysis, Score % tracking, and printable Question Booklets.</div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
 
-    with tab_reg:
-        with st.form("student_register_form"):
-            full_name = st.text_input("Full Name").strip()
-            email = st.text_input("Email Address").strip().lower()
-            pwd = st.text_input("Create Password (min 6 chars)", type="password")
-            if st.form_submit_button("Create Account & Start", type="primary"):
-                if not full_name or "@" not in email or len(pwd) < 6:
-                    st.error("Please enter valid name, email, and at least 6-character password.")
-                else:
-                    existing = sb.table("students").select("id").eq("email", email).execute().data
-                    if existing:
-                        st.error("An account with this email already exists. Please Sign In.")
-                    else:
-                        created = sb.table("students").insert({
-                            "full_name": full_name,
-                            "email": email,
-                            "password_hash": hash_password(pwd),
-                        }).execute().data[0]
-                        st.session_state["student"] = created
-                        st.success("Registered successfully!")
+    with col_auth:
+        tab_login, tab_reg = st.tabs(["Sign In", "New Student Registration"])
+
+        with tab_login:
+            with st.form("student_login_form"):
+                email = st.text_input("Email Address").strip().lower()
+                pwd = st.text_input("Password", type="password")
+                if st.form_submit_button("Sign In to Portal", type="primary", use_container_width=True):
+                    res = sb.table("students").select("*").eq("email", email).execute().data
+                    if res and verify_password(pwd, res[0]["password_hash"]):
+                        st.session_state["student"] = res[0]
                         st.rerun()
+                    else:
+                        st.error("Invalid email or password.")
+
+        with tab_reg:
+            with st.form("student_register_form"):
+                full_name = st.text_input("Full Name").strip()
+                email = st.text_input("Email Address").strip().lower()
+                pwd = st.text_input("Create Password (min 6 chars)", type="password")
+                if st.form_submit_button("Create Account & Start", type="primary", use_container_width=True):
+                    if not full_name or "@" not in email or len(pwd) < 6:
+                        st.error("Please enter valid name, email, and at least 6-character password.")
+                    else:
+                        existing = sb.table("students").select("id").eq("email", email).execute().data
+                        if existing:
+                            st.error("An account with this email already exists. Please Sign In.")
+                        else:
+                            created = sb.table("students").insert({
+                                "full_name": full_name,
+                                "email": email,
+                                "password_hash": hash_password(pwd),
+                            }).execute().data[0]
+                            st.session_state["student"] = created
+                            st.success("Registered successfully!")
+                            st.rerun()
 
 
 # ---------------------------------------------------------------------------
@@ -1329,15 +1390,23 @@ def render_student_portal(sb: Client):
 
         c_phy, c_chem, c_math = st.columns(3)
         selected_units_by_sub: Dict[str, List[str]] = {}
+        badge_styles = {
+            "Physics": ("jee-sub-phy", "Physics"),
+            "Chemistry": ("jee-sub-chem", "Chemistry"),
+            "Mathematics": ("jee-sub-math", "Mathematics"),
+        }
 
         for col_widget, sub in ((c_phy, "Physics"), (c_chem, "Chemistry"), (c_math, "Mathematics")):
             with col_widget:
+                css_cls, lbl = badge_styles[sub]
+                st.markdown(f'<div class="jee-sub-badge {css_cls}">{lbl}</div>', unsafe_allow_html=True)
                 opts = ["Select All"] + units_by_sub[sub]
                 picked = st.multiselect(
                     f"{sub} Units",
                     options=opts,
                     default=[],
                     placeholder=f"Choose {sub} units (optional)",
+                    label_visibility="collapsed",
                     key=f"pick_units_{sub}",
                 )
                 if "Select All" in picked:
