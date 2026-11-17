@@ -58,10 +58,13 @@ def inject_custom_theme(is_active_test: bool = False):
         <style>
         @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=JetBrains+Mono:wght@500;700&display=swap');
 
-        html, body, h1, h2, h3, h4, p, span, label, input, textarea, button,
-        [class*="css"], .stApp, [data-testid="stMarkdownContainer"] {{
+        html, body, h1, h2, h3, h4, p, label, input, textarea, button,
+        .stApp, [data-testid="stMarkdownContainer"] {{
             font-family: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, sans-serif !important;
             color: #0F172A;
+        }}
+        [data-testid="stIconMaterial"], .material-symbols-rounded, .material-icons {{
+            font-family: 'Material Symbols Rounded', 'Material Icons', sans-serif !important;
         }}
         .stApp, [data-testid="stAppViewContainer"], [data-testid="stHeader"] {{
             background-color: {app_bg} !important;
@@ -336,6 +339,18 @@ def _pdf_text(text: str, use_unicode: bool) -> str:
     return s.encode("latin-1", "replace").decode("latin-1")
 
 
+def _safe_multicell(pdf: FPDF, h: float, txt: str):
+    """Safely wraps text across full printable page width without ever losing horizontal margin."""
+    pdf.set_x(pdf.l_margin)
+    w = max(40.0, pdf.w - pdf.l_margin - pdf.r_margin)
+    safe_txt = txt if txt else " "
+    try:
+        pdf.multi_cell(w, h, safe_txt, new_x="LMARGIN", new_y="NEXT", wrapmode="CHAR")
+    except TypeError:
+        pdf.multi_cell(w, h, safe_txt)
+    pdf.set_x(pdf.l_margin)
+
+
 def build_question_booklet_pdf(
     sb: Client,
     student_name: str,
@@ -345,6 +360,7 @@ def build_question_booklet_pdf(
 ) -> bytes:
     """Generates a clean downloadable Question Booklet PDF for any submitted/past mock test."""
     pdf = FPDF()
+    pdf.set_margins(12, 12, 12)
     pdf.set_auto_page_break(auto=True, margin=15)
     pdf.add_page()
 
@@ -369,25 +385,27 @@ def build_question_booklet_pdf(
     dt_str = str(attempt.get("test_date", ""))[:16].replace("T", " ")
 
     # Header Block
+    usable_w = max(40.0, pdf.w - pdf.l_margin - pdf.r_margin)
     pdf.set_fill_color(239, 246, 255)
-    pdf.rect(10, 10, 190, 28, "F")
-    pdf.set_xy(14, 13)
+    pdf.rect(pdf.l_margin, 10, usable_w, 28, "F")
+    pdf.set_xy(pdf.l_margin + 3, 13)
     set_f(14, bold=True)
     pdf.set_text_color(30, 58, 138)
-    pdf.cell(0, 7, _pdf_text("JEE Main Mock Test — Question & Answer Booklet", use_unicode), ln=True)
+    pdf.cell(usable_w - 6, 7, _pdf_text("JEE Main Mock Test - Question & Answer Booklet", use_unicode), new_x="LMARGIN", new_y="NEXT")
 
-    pdf.set_x(14)
+    pdf.set_x(pdf.l_margin + 3)
     set_f(10)
     pdf.set_text_color(51, 65, 85)
     pdf.cell(
-        0,
+        usable_w - 6,
         5,
         _pdf_text(f"Student: {student_name}  |  Date: {dt_str}  |  Subjects: {attempt.get('subjects_covered', '')}", use_unicode),
-        ln=True,
+        new_x="LMARGIN",
+        new_y="NEXT",
     )
-    pdf.set_x(14)
+    pdf.set_x(pdf.l_margin + 3)
     pdf.cell(
-        0,
+        usable_w - 6,
         5,
         _pdf_text(
             f"Score: {obtained}/{full_marks} ({pct}%)  |  Correct: {attempt.get('correct_count', 0)}  |  "
@@ -395,9 +413,10 @@ def build_question_booklet_pdf(
             f"Time: {format_duration(attempt.get('time_taken_sec', 0))} / {format_duration(attempt.get('total_allotted_sec', 0))}",
             use_unicode,
         ),
-        ln=True,
+        new_x="LMARGIN",
+        new_y="NEXT",
     )
-    pdf.ln(8)
+    pdf.set_xy(pdf.l_margin, 42)
 
     for idx, item in enumerate(review_rows, start=1):
         q = item["question"]
@@ -408,8 +427,8 @@ def build_question_booklet_pdf(
 
         pdf.set_text_color(15, 23, 42)
         set_f(11, bold=True)
-        pdf.multi_cell(
-            0,
+        _safe_multicell(
+            pdf,
             6,
             _pdf_text(f"Q{idx}. [{q.get('subject', '')} - {unit_clean}] {q.get('question', '')}", use_unicode),
         )
@@ -421,20 +440,21 @@ def build_question_booklet_pdf(
             opt_val = str(q.get(f"option_{opt_num}", "")).strip()
             img_url = extract_option_image_url(sb, opt_val)
             if img_url:
-                pdf.cell(12, 6, f"({opt_num})")
+                y_pos = pdf.get_y()
+                if y_pos > 245:
+                    pdf.add_page()
+                    y_pos = pdf.get_y()
                 try:
                     with urllib.request.urlopen(img_url, timeout=4) as resp:
                         img_bytes = resp.read()
-                    x_pos, y_pos = pdf.get_x(), pdf.get_y()
-                    if y_pos > 250:
-                        pdf.add_page()
-                        x_pos, y_pos = pdf.get_x(), pdf.get_y()
-                    pdf.image(io.BytesIO(img_bytes), x=x_pos, y=y_pos, w=45)
-                    pdf.ln(22)
+                    pdf.set_x(pdf.l_margin)
+                    pdf.cell(12, 6, f"({opt_num})")
+                    pdf.image(io.BytesIO(img_bytes), x=pdf.l_margin + 14, y=y_pos, w=45)
+                    pdf.set_xy(pdf.l_margin, y_pos + 24)
                 except Exception:
-                    pdf.multi_cell(0, 6, _pdf_text(f"[Option {opt_num} Diagram]", use_unicode))
+                    _safe_multicell(pdf, 5.5, _pdf_text(f"  ({opt_num}) [Option Diagram]", use_unicode))
             else:
-                pdf.multi_cell(0, 5.5, _pdf_text(f"  ({opt_num}) {opt_val}", use_unicode))
+                _safe_multicell(pdf, 5.5, _pdf_text(f"  ({opt_num}) {opt_val}", use_unicode))
 
         # Outcome line following Option 2A rules
         set_f(10, bold=True)
@@ -451,10 +471,11 @@ def build_question_booklet_pdf(
             else:
                 verdict = f"Result: SKIPPED (0)  |  Correct Answer: ({corr})"
 
-        pdf.multi_cell(0, 6, _pdf_text(verdict, use_unicode))
+        _safe_multicell(pdf, 6, _pdf_text(verdict, use_unicode))
         pdf.set_draw_color(226, 232, 240)
         y_line = pdf.get_y() + 1
-        pdf.line(10, y_line, 200, y_line)
+        pdf.line(pdf.l_margin, y_line, pdf.w - pdf.r_margin, y_line)
+        pdf.set_x(pdf.l_margin)
         pdf.ln(4)
 
     out = pdf.output()
@@ -1112,6 +1133,28 @@ def _on_option_checkbox_change(qid: str, opt_num: str):
             test["responses"][qid] = None
 
 
+def _on_skip_click(qid: str, idx: int, total_q: int):
+    """Clears current response & checkboxes safely BEFORE rerun renders widgets."""
+    test = st.session_state.get("active_test")
+    if not test:
+        return
+    test["responses"][qid] = None
+    for opt_num in ("1", "2", "3", "4"):
+        st.session_state[f"chk_{qid}_{opt_num}"] = False
+    if idx < total_q - 1:
+        test["current_idx"] = idx + 1
+
+
+def _on_nav_click(target_idx: int):
+    test = st.session_state.get("active_test")
+    if test:
+        test["current_idx"] = target_idx
+
+
+def _exit_review_to_home():
+    st.session_state.pop("last_review", None)
+
+
 def render_submission_review(sb: Client):
     rev = st.session_state["last_review"]
     att = rev["attempt"]
@@ -1121,7 +1164,10 @@ def render_submission_review(sb: Client):
     full_marks = max(1, int(att["full_marks"]))
     pct = round((int(att["marks_obtained"]) / full_marks) * 100.0, 1)
 
-    st.success("Mock Test Submitted & Saved to Your Performance Record!")
+    top_msg, top_home = st.columns([3.5, 1.3])
+    top_msg.success("Mock Test Submitted & Saved to Your Performance Record!")
+    top_home.button("⬅️ Back to Home / Test Builder", on_click=_exit_review_to_home, use_container_width=True)
+
     c1, c2, c3, c4, c5 = st.columns(5)
     c1.metric("Marks Obtained", f"{att['marks_obtained']} / {att['full_marks']}")
     c2.metric("Score %", f"{pct}%")
@@ -1138,20 +1184,23 @@ def render_submission_review(sb: Client):
         value=False,
         key="rev_pdf_hide_skip",
     )
-    pdf_bytes = build_question_booklet_pdf(
-        sb=sb,
-        student_name=student["full_name"],
-        attempt=att,
-        review_rows=rows,
-        hide_skipped_answers=hide_skipped_pdf,
-    )
-    col_pdf_btn.download_button(
-        "📄 Download Question Booklet PDF",
-        data=pdf_bytes,
-        file_name=f"JEE_Mock_Booklet_{att['test_date'][:10]}.pdf",
-        mime="application/pdf",
-        type="primary",
-    )
+    try:
+        pdf_bytes = build_question_booklet_pdf(
+            sb=sb,
+            student_name=student["full_name"],
+            attempt=att,
+            review_rows=rows,
+            hide_skipped_answers=hide_skipped_pdf,
+        )
+        col_pdf_btn.download_button(
+            "📄 Download Question Booklet PDF",
+            data=pdf_bytes,
+            file_name=f"JEE_Mock_Booklet_{att['test_date'][:10]}.pdf",
+            mime="application/pdf",
+            type="primary",
+        )
+    except Exception as exc:
+        col_pdf_btn.warning(f"Could not generate PDF ({exc}). You can still review below or download from Performance Record.")
 
     st.subheader("Question-by-Question Answer Review")
     for idx, item in enumerate(rows, start=1):
@@ -1223,7 +1272,7 @@ def render_active_test(sb: Client):
     live_timer_banner()
 
     # Clickable Question Number Palette (jump directly to any question)
-    with st.expander(f"Question Palette (Jump to any of {total_q} questions)", expanded=False):
+    if st.toggle(f"Show Question Palette ({total_q} Questions)", value=False, key="pal_toggle"):
         cols_per_row = 10
         for row_start in range(0, total_q, cols_per_row):
             row_cols = st.columns(cols_per_row)
@@ -1317,21 +1366,26 @@ def render_active_test(sb: Client):
 
     # Navigation Bar: Previous | Skip | Next | Submit Mock Test
     nav1, nav2, nav3, nav_spacer, nav4 = st.columns([1.1, 1.1, 1.1, 1.4, 1.5])
-    if nav1.button("⬅️ Previous", disabled=(idx == 0), use_container_width=True):
-        test["current_idx"] = idx - 1
-        st.rerun()
-
-    if nav2.button("⏭️ Skip", use_container_width=True):
-        test["responses"][qid] = None
-        for opt_num in ("1", "2", "3", "4"):
-            st.session_state[f"chk_{qid}_{opt_num}"] = False
-        if idx < total_q - 1:
-            test["current_idx"] = idx + 1
-        st.rerun()
-
-    if nav3.button("Next ➡️", disabled=(idx >= total_q - 1), use_container_width=True):
-        test["current_idx"] = idx + 1
-        st.rerun()
+    nav1.button(
+        "⬅️ Previous",
+        disabled=(idx == 0),
+        on_click=_on_nav_click,
+        args=(idx - 1,),
+        use_container_width=True,
+    )
+    nav2.button(
+        "⏭️ Skip",
+        on_click=_on_skip_click,
+        args=(qid, idx, total_q),
+        use_container_width=True,
+    )
+    nav3.button(
+        "Next ➡️",
+        disabled=(idx >= total_q - 1),
+        on_click=_on_nav_click,
+        args=(idx + 1,),
+        use_container_width=True,
+    )
 
     if nav4.button("✅ Submit Mock Test", type="primary", use_container_width=True):
         finalize_and_score_test(sb)
@@ -1560,20 +1614,23 @@ def render_student_portal(sb: Client):
                 if not hist_review:
                     st.warning("Question details were not found for this attempt.")
                 else:
-                    pdf_data = build_question_booklet_pdf(
-                        sb=sb,
-                        student_name=student["full_name"],
-                        attempt=chosen_att,
-                        review_rows=hist_review,
-                        hide_skipped_answers=hide_skip_hist,
-                    )
-                    st.download_button(
-                        "⬇️ Click to Download Question Booklet PDF",
-                        data=pdf_data,
-                        file_name=f"JEE_Mock_Booklet_{chosen_att['test_date'][:10]}.pdf",
-                        mime="application/pdf",
-                        type="primary",
-                    )
+                    try:
+                        pdf_data = build_question_booklet_pdf(
+                            sb=sb,
+                            student_name=student["full_name"],
+                            attempt=chosen_att,
+                            review_rows=hist_review,
+                            hide_skipped_answers=hide_skip_hist,
+                        )
+                        st.download_button(
+                            "⬇️ Click to Download Question Booklet PDF",
+                            data=pdf_data,
+                            file_name=f"JEE_Mock_Booklet_{chosen_att['test_date'][:10]}.pdf",
+                            mime="application/pdf",
+                            type="primary",
+                        )
+                    except Exception as exc:
+                        st.error(f"Could not generate PDF: {exc}")
 
 
 # ---------------------------------------------------------------------------
