@@ -49,6 +49,15 @@ FLAG_REASON_OPTIONS = [
     "Other",
 ]
 
+SECURITY_QUESTIONS = [
+    "What was the name of your first school?",
+    "What is your mother's maiden name?",
+    "What city were you born in?",
+    "What was the name of your first pet?",
+    "Who was your favorite school teacher?",
+    "What is your favorite childhood book or movie?",
+]
+
 MOTIVATIONAL_QUOTES = [
     "Yes, you can!",
     "Mistakes are proof that you are learning something new.",
@@ -304,6 +313,20 @@ def verify_password(password: str, stored_hash: str) -> bool:
         return hmac.compare_digest(computed, f"{salt_hex}${expected_hex}")
     except Exception:
         return False
+
+
+def normalize_security_answer(answer: str) -> str:
+    return re.sub(r"\s+", " ", (answer or "").strip().lower())
+
+
+def hash_security_answer(answer: str) -> str:
+    return hash_password(normalize_security_answer(answer))
+
+
+def verify_security_answer(answer: str, stored_hash: Optional[str]) -> bool:
+    if not stored_hash:
+        return False
+    return verify_password(normalize_security_answer(answer), stored_hash)
 
 
 def compute_content_hash(row: Dict) -> str:
@@ -607,20 +630,38 @@ def render_admin_panel(sb: Client):
     )
 
     if not st.session_state.get("is_admin"):
+        expected_email = str(st.secrets.get("ADMIN_EMAIL", "")).strip().lower()
+        expected_pwd = str(st.secrets.get("ADMIN_PASSWORD", ""))
+        if not expected_email or not expected_pwd:
+            st.warning(
+                "Admin login requires both `ADMIN_EMAIL` and `ADMIN_PASSWORD` in Streamlit Secrets "
+                "(App Settings → Secrets)."
+            )
+            return
         with st.form("admin_login_form"):
+            admin_email = st.text_input("Admin Email Address").strip().lower()
             pwd = st.text_input("Admin Password", type="password")
             submitted = st.form_submit_button("Sign In as Admin", type="primary")
             if submitted:
-                if hmac.compare_digest(pwd, st.secrets["ADMIN_PASSWORD"]):
+                email_ok = hmac.compare_digest(admin_email, expected_email)
+                pwd_ok = hmac.compare_digest(pwd, expected_pwd)
+                if email_ok and pwd_ok:
                     st.session_state["is_admin"] = True
+                    st.session_state["admin_email"] = expected_email
                     st.rerun()
                 else:
-                    st.error("Invalid admin password.")
+                    time.sleep(0.8)
+                    st.error("Invalid admin email or password.")
         return
 
-    if st.button("Lock Admin Session", key="admin_logout"):
-        st.session_state["is_admin"] = False
-        st.rerun()
+    adm_l, adm_r = st.columns([4, 1])
+    with adm_l:
+        st.caption(f"Signed in as Admin ({st.session_state.get('admin_email', '')})")
+    with adm_r:
+        if st.button("Lock Admin Session", key="admin_logout"):
+            st.session_state["is_admin"] = False
+            st.session_state.pop("admin_email", None)
+            st.rerun()
 
     tab_syl, tab_upload, tab_bank, tab_flags = st.tabs([
         "1. Upload JEE Syllabus",
@@ -1080,8 +1121,8 @@ def render_admin_panel(sb: Client):
 def render_student_auth(sb: Client):
     st.markdown(
         '<div class="jee-hero">'
-        '<h2>JEE Main PrepVibe</h2>'
-        '<p>Personalized Physics, Chemistry & Mathematics Tests with Performance Monitor.</p>'
+        '<h2>JEE Main Custom Mock Test Portal</h2>'
+        '<p>Design personalized Physics, Chemistry & Mathematics tests, track your score %, and download Question Booklets.</p>'
         '</div>',
         unsafe_allow_html=True,
     )
@@ -1101,7 +1142,7 @@ def render_student_auth(sb: Client):
         )
 
     with col_auth:
-        tab_login, tab_reg = st.tabs(["Sign In", "New Student Registration"])
+        tab_login, tab_reg, tab_reset = st.tabs(["Sign In", "New Student Registration", "Reset Password"])
 
         with tab_login:
             with st.form("student_login_form"):
@@ -1115,6 +1156,7 @@ def render_student_auth(sb: Client):
                         st.session_state["last_login_quote"] = st.session_state["login_quote"]
                         st.rerun()
                     else:
+                        time.sleep(0.8)
                         st.error("Invalid email or password.")
 
         with tab_reg:
@@ -1122,24 +1164,62 @@ def render_student_auth(sb: Client):
                 full_name = st.text_input("Full Name").strip()
                 email = st.text_input("Email Address").strip().lower()
                 pwd = st.text_input("Create Password (min 6 chars)", type="password")
+                pwd_confirm = st.text_input("Confirm Password", type="password")
+                sec_q = st.selectbox("Security Question (for password recovery)", options=SECURITY_QUESTIONS)
+                sec_ans = st.text_input("Security Answer (remember this to reset your password)")
                 if st.form_submit_button("Create Account & Start", type="primary", use_container_width=True):
                     if not full_name or "@" not in email or len(pwd) < 6:
                         st.error("Please enter valid name, email, and at least 6-character password.")
+                    elif pwd != pwd_confirm:
+                        st.error("Passwords do not match.")
+                    elif len(normalize_security_answer(sec_ans)) < 2:
+                        st.error("Please enter an answer to your security question (at least 2 characters).")
                     else:
                         existing = sb.table("students").select("id").eq("email", email).execute().data
                         if existing:
-                            st.error("An account with this email already exists. Please Sign In.")
+                            st.error("An account with this email already exists. Please Sign In or use Reset Password.")
                         else:
                             created = sb.table("students").insert({
                                 "full_name": full_name,
                                 "email": email,
                                 "password_hash": hash_password(pwd),
+                                "security_question": sec_q,
+                                "security_answer_hash": hash_security_answer(sec_ans),
                             }).execute().data[0]
                             st.session_state["student"] = created
                             st.session_state["login_quote"] = _pick_login_quote(st.session_state.get("last_login_quote"))
                             st.session_state["last_login_quote"] = st.session_state["login_quote"]
                             st.success("Registered successfully!")
                             st.rerun()
+
+        with tab_reset:
+            st.caption("Answer the security question you chose during registration to set a new password.")
+            with st.form("student_reset_pwd_form"):
+                reset_email = st.text_input("Registered Email Address").strip().lower()
+                reset_q = st.selectbox("Your Security Question", options=SECURITY_QUESTIONS)
+                reset_ans = st.text_input("Your Security Answer")
+                new_pwd = st.text_input("New Password (min 6 chars)", type="password")
+                new_pwd_confirm = st.text_input("Confirm New Password", type="password")
+                if st.form_submit_button("Verify & Reset Password", type="primary", use_container_width=True):
+                    if "@" not in reset_email or not reset_ans.strip():
+                        st.error("Please enter your registered email and security answer.")
+                    elif len(new_pwd) < 6:
+                        st.error("New password must be at least 6 characters.")
+                    elif new_pwd != new_pwd_confirm:
+                        st.error("New passwords do not match.")
+                    else:
+                        res = sb.table("students").select("*").eq("email", reset_email).execute().data
+                        stu = res[0] if res else None
+                        q_match = bool(stu and (stu.get("security_question") or "").strip() == reset_q)
+                        ans_match = bool(stu and verify_security_answer(reset_ans, stu.get("security_answer_hash")))
+                        if q_match and ans_match:
+                            sb.table("students").update({
+                                "password_hash": hash_password(new_pwd),
+                            }).eq("id", stu["id"]).execute()
+                            st.success("Password updated! You can now sign in with your new password.")
+                        else:
+                            time.sleep(0.8)
+                            st.error("Could not verify your email, security question, and answer.")
 
 
 # ---------------------------------------------------------------------------
@@ -1564,11 +1644,74 @@ def render_student_portal(sb: Client):
         return
 
     student = st.session_state["student"]
-    top_l, top_r = st.columns([4, 1])
+    top_l, top_mid, top_r = st.columns([3.2, 1.3, 0.9])
     with top_l:
         st.markdown(f"Signed in as **{student['full_name']}** ({student['email']})")
+    with top_mid:
+        with st.popover("🔑 Account Security", use_container_width=True):
+            st.markdown("**Change Password**")
+            verify_method = st.radio(
+                "Verify using",
+                ["Current Password", "Security Question"],
+                horizontal=True,
+                key="chg_pwd_method",
+            )
+            with st.form("student_change_pwd_form"):
+                if verify_method == "Current Password":
+                    curr_secret = st.text_input("Current Password", type="password")
+                else:
+                    saved_q = student.get("security_question")
+                    if saved_q:
+                        st.caption(f"Question: {saved_q}")
+                    else:
+                        st.info("No security question saved yet. Set one below first.")
+                    curr_secret = st.text_input("Your Security Answer")
+                chg_new_pwd = st.text_input("New Password (min 6 chars)", type="password")
+                chg_confirm_pwd = st.text_input("Confirm New Password", type="password")
+                if st.form_submit_button("Update Password", type="primary", use_container_width=True):
+                    if len(chg_new_pwd) < 6:
+                        st.error("New password must be at least 6 characters.")
+                    elif chg_new_pwd != chg_confirm_pwd:
+                        st.error("New passwords do not match.")
+                    else:
+                        if verify_method == "Current Password":
+                            verified = verify_password(curr_secret, student.get("password_hash", ""))
+                        else:
+                            verified = verify_security_answer(curr_secret, student.get("security_answer_hash"))
+                        if not verified:
+                            time.sleep(0.8)
+                            st.error("Verification failed. Please check your entry.")
+                        else:
+                            new_hash = hash_password(chg_new_pwd)
+                            sb.table("students").update({"password_hash": new_hash}).eq("id", student["id"]).execute()
+                            student["password_hash"] = new_hash
+                            st.success("Password updated successfully!")
+
+            st.divider()
+            st.markdown("**Update Security Question**")
+            curr_sq = student.get("security_question") or SECURITY_QUESTIONS[0]
+            sq_idx = SECURITY_QUESTIONS.index(curr_sq) if curr_sq in SECURITY_QUESTIONS else 0
+            with st.form("student_update_secq_form"):
+                upd_pwd = st.text_input("Current Password (to confirm)", type="password")
+                upd_q = st.selectbox("Security Question", options=SECURITY_QUESTIONS, index=sq_idx)
+                upd_ans = st.text_input("New Security Answer")
+                if st.form_submit_button("Save Security Question", use_container_width=True):
+                    if not verify_password(upd_pwd, student.get("password_hash", "")):
+                        time.sleep(0.8)
+                        st.error("Current password is incorrect.")
+                    elif len(normalize_security_answer(upd_ans)) < 2:
+                        st.error("Security answer must be at least 2 characters.")
+                    else:
+                        ans_hash = hash_security_answer(upd_ans)
+                        sb.table("students").update({
+                            "security_question": upd_q,
+                            "security_answer_hash": ans_hash,
+                        }).eq("id", student["id"]).execute()
+                        student["security_question"] = upd_q
+                        student["security_answer_hash"] = ans_hash
+                        st.success("Security question saved!")
     with top_r:
-        if st.button("Sign Out"):
+        if st.button("Sign Out", use_container_width=True):
             st.session_state.pop("student", None)
             st.session_state.pop("active_test", None)
             st.session_state.pop("last_review", None)
@@ -1831,10 +1974,10 @@ def main():
     inject_custom_theme(is_active_test=bool(st.session_state.get("active_test")))
     sb = get_supabase()
     with st.sidebar:
-        st.title("Selection Panel")
-        mode = st.radio("Workspace", ["Student", "Admin"])
+        st.title("JEE Prep Portal")
+        mode = st.radio("Workspace", ["Student Mock Test", "Admin Console"])
 
-    if mode == "Admin":
+    if str(mode).strip().lower().startswith("admin"):
         render_admin_panel(sb)
     else:
         render_student_portal(sb)
