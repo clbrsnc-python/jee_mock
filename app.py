@@ -1834,7 +1834,7 @@ def main():
         st.title("Selection Panel")
         mode = st.radio("Workspace", ["Student", "Admin"])
 
-    if mode == "Admin Console":
+    if mode == "Admin":
         render_admin_panel(sb)
     else:
         render_student_portal(sb)
